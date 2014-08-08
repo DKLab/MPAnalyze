@@ -21,7 +21,7 @@ Path Analyze --
       will be done in these window chunks.
       
       
-  D)  Allow margins to be region specific? Allow users to name regions? (yes)
+  D)  Allow margins to be region specific? Allow users to name regions?
 
   
 
