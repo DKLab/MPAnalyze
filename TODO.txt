@@ -1,0 +1,20 @@
+Path Analyze --
+  A)  Create another axes for sideview of data from zstack
+    
+    Total of three displays of data:
+      1) Top down view
+      2) Sideview (zstack)
+      3) Scan data
+    
+    Allow user to set and move limits/margins in any of the three displays
+    The limits should update simultaneously in all three displays.
+    
+    
+  B)  Moving through scan data:
+      Allow user to 'scroll' through scan data instead of just displaying the first 100 lines
+    
+  C)  Selecting scan data:
+      Allow user to select regions to keep and regions to discard before calculating
+      
+      
+  D)  Allow margins to be region specific? Allow users to name regions? (yes)
