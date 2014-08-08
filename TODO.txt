@@ -12,9 +12,24 @@ Path Analyze --
     
   B)  Moving through scan data:
       Allow user to 'scroll' through scan data instead of just displaying the first 100 lines
+      
     
   C)  Selecting scan data:
       Allow user to select regions to keep and regions to discard before calculating
       
+      DISPLAY THE WINDOW -- overlay the window (width X time) on the data -- make it clear that calculations
+      will be done in these window chunks.
+      
       
   D)  Allow margins to be region specific? Allow users to name regions? (yes)
+
+  
+
+
+
+Diameter --
+  Determine math for calculating diameter from following profile to replace FWHM
+  
+      Cylindar profiled by elipsoid (or rectangle)
+      
+      Noise: blood cells near edge
