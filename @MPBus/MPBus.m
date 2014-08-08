@@ -51,6 +51,7 @@ classdef MPBus < handle
         % API methods
   
         [variableNameList, status] = variables(this);
+        
         % output() sends a variable to the buffer (output from module) 
         status = output(this, variableName, variableValue);
         % input() gets a variable from the workspace (input to module)
@@ -81,6 +82,10 @@ classdef MPBus < handle
         status = pushBuffer(this, variableName, variableValue);
         [variableName, variableValue, newBufferSize, status] = popBuffer(this);
         nVariables = bufferSize(this);
+        
+        % the GUI to allow users to accept variables from the buffer and
+        % place on the MPWorkspace
+        status = outputDialog(this);
         
         %status = registerRefreshFunction(this, functionHandle);
         %status = dispatchRefresh(this);
