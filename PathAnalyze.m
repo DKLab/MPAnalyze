@@ -17,6 +17,8 @@ handles.showWindow = false;
 handles.windowPeriod = 100;       % the height (in time) of a data window
 handles.windowHorizontalLocations = 1;  % the line locations of every horizontal window line
 handles.windowWidth = 0;
+handles.closestPoint = [];
+handles.closestLineHandle = [];
 
 % check if a MPBus object was passed into varargin, otherwise just create a
 % new MPBus
@@ -59,11 +61,15 @@ end
 
 function drawTopView(handles)
     set(handles.main,'CurrentAxes',handles.axes_topView);
+    scanData = handles.mpbus.scanData;
     
     cla
-    imagesc(handles.mpbus.scanData.axisLimCol,handles.mpbus.scanData.axisLimRow,handles.mpbus.scanData.im);
+    imageHandle = imagesc(scanData.axisLimCol, scanData.axisLimRow, ...
+                                                            scanData.im);
     axis off
     colormap(handles.colormap);
+    
+    set(imageHandle, 'ButtonDownFcn', @mouseClick);
 end
 
 function drawSideView(handles, z)
@@ -106,35 +112,115 @@ end
 %%%
 
 function updateMousePosition(hObject)
+   % for each window line on the axes, find the closest point to (x,y)
+    % then from the set of closest points, find the closest one to (x,y)
+    % and draw a line (point) with the tag closestPoint
+    
    handles = guidata(hObject);
    
-   mousePosition = get(handles.axes_topView, 'CurrentPoint');
+   scanData = handles.mpbus.scanData;
    
-   % check if the mouse is in the top view axes
-   topViewAxes = getpixelposition(handles.axes_topView);
-   topViewPanel = getpixelposition(handles.panel_topView);
+   if ~isempty(scanData)
+       x_bounds = scanData.axisLimRow;
+       y_bounds = scanData.axisLimCol;
+       topViewPosition = get(handles.axes_topView, 'CurrentPoint');
+
+       x_topView = topViewPosition(1,1);
+       y_topView = topViewPosition(1,2);
+       
+       if x_topView > x_bounds(1) && x_topView < x_bounds(2) && ...
+          y_topView > y_bounds(1) && y_topView < y_bounds(2)
+
+            % cursor is in the top view axes
+            % determine which line is the closest to the cursor
+            lineList = findall(handles.axes_topView, 'Tag', 'windowLine');
+            if ~isempty(lineList)
+
+                closestPointList = cell(length(lineList), 1);
+
+                for index = 1 : length(lineList)
+                    closestPointList{index} = getClosestPoint( ...
+                                            lineList(index), x_topView, y_topView);        
+                end
+
+                squareDistanceList = cellfun(@squareDistance, closestPointList);
+
+                [ ~, closestLineIndex ] = min(squareDistanceList);
+
+                closestPoint = closestPointList{closestLineIndex};
+                % save this info for later
+                handles.closestPoint = closestPoint;
+                handles.closestLineHandle = lineList(closestLineIndex);
+                guidata(handles.main, handles);
+                
+                % and draw
+                drawPoint(handles.axes_topView, closestPoint(1), closestPoint(2) );
+                
+                
+            end
+       end
+   end
    
-   %{
-   bounds(1) = topViewAxes(1) + topViewPanel(1);
-   bounds(2) = topViewAxes(2) + topViewPanel(2);
-   bounds(3) = topViewAxes(3);
-   bounds(4) = topViewAxes(4);
-   %}
-   bounds = topViewPanel;
+   function d = squareDistance(p)
+        d = ( p(1) - x_topView )^2 + ( p(2) - y_topView )^2;
+   end
    
-   x = floor(mousePosition(1) - bounds(1));
-   y = floor(mousePosition(2) - bounds(2));
-   
-   disp('----------------------------------------');
-   disp(bounds);
-   fprintf('mouse: x:%d, y:%d\n', mousePosition(1), mousePosition(2));
-   fprintf('top view, x:%d, y:%d\n', x, y);
+end
+
+function closestPoint = getClosestPoint(lineHandle, x, y)
+    X = get(lineHandle, 'XData');
+    Y = get(lineHandle, 'YData');
+     
+    lineVector = [ X(2) - X(1), Y(2) - Y(1) ];
+    pointVector = [ x - X(1), y - Y(1) ];
+    L = dot(lineVector, lineVector);
+    r = dot(lineVector, pointVector) / L;
+    
+    
+    closestPoint = [ X(1), Y(1) ] + lineVector .* r;
+    
+    if r < 0
+        closestPoint(1) = X(1);
+        closestPoint(2) = Y(1);
+    end
+    
+    if r > 1
+        closestPoint(1) = X(2);
+        closestPoint(2) = Y(2);
+    end
+end
+
+function drawPoint(axesHandle, x, y)
+    
+    persistent pointHandle;
+    
+    if ishghandle(pointHandle)
+        delete(pointHandle);
+    end
+
+    pointHandle = line(x,y,...
+                        'Marker','o',...
+                        'Color','green',...
+                        'Parent',axesHandle,...
+                        'Tag','closestPoint',...
+                        'ButtonDownFcn', @mouseClick);
+
 end
 
 
+
 %%% Callbacks
+function mouseClick(hObject, ~)
+    handles = guidata(hObject);
+    if ~isempty(handles.closestPoint)
+        
+    end
+end
+
 function mouseMovement(hObject, ~)
-    persistent lastMoveTime;
+ updateMousePosition(hObject);
+%{  
+persistent lastMoveTime;
     currentTime = clock;
     WAIT_SECONDS = 0.1;
 
@@ -146,7 +232,7 @@ function mouseMovement(hObject, ~)
            updateMousePosition(hObject);
        end
     end
-
+%}
 end
 
 function slider_lineScan_Callback(hObject, ~)
@@ -239,8 +325,10 @@ function drawScanRegion(hObject, ~)
     switch checked
         case 'on'
             % just clear the scan region and uncheck this option
-            lines = findall(handles.axes_topView, 'Tag', 'regionLine');
+            lines = findall(handles.axes_topView, 'Tag', 'windowLine');
+            points = findall(handles.axes_topView, 'Tag', 'windowPoint');
             delete(lines);
+            delete(points);
             set(handles.menu_drawScanRegion, 'Checked', 'off');
             return;
         case 'off'
@@ -265,16 +353,16 @@ function drawScanRegion(hObject, ~)
         hold on
         
         plot(sc.startPoint(1),sc.startPoint(2),'g*',...
-            'Tag','regionLine');
+            'Tag','windowPoint');
         plot(sc.endPoint(1),sc.endPoint(2),'r*',...
-            'Tag','regionLine');
+            'Tag','windowPoint');
         
         % draw a line or box (depending on data structure type)
         if strcmp(sc.scanShape,'line')
             line([sc.startPoint(1) sc.endPoint(1)], ...
                 [sc.startPoint(2) sc.endPoint(2)],...
                 'linewidth',2,...
-                'Tag','regionLine');
+                'Tag','windowLine');
         elseif strcmp(sc.scanShape,'box')
             % width and height must be > 0 to draw a box
             boxXmin = min([sc.startPoint(1),sc.endPoint(1)]);
@@ -285,14 +373,22 @@ function drawScanRegion(hObject, ~)
             rectangle('Position',[boxXmin,boxYmin, ...
                 boxXmax-boxXmin,boxYmax-boxYmin], ...
                 'EdgeColor','green',...
-                'Tag','regionLine');
+                'Tag','windowLine');
         end
         
         % find a point to place text
         %placePoint = sc.startPoint + .1*(sc.endPoint-sc.startPoint);
         %text(placePoint(1)-.1,placePoint(2)+.05,sc.name,'color','red','FontSize',12)
 
+        % attach a context menu to the axes
+        menuHandle = uicontextmenu;
+        uimenu(menuHandle,'Label','Hide','Callback',@axesmenu_hide);
+        set(handles.axes_topView, 'uicontextmenu', menuHandle);
     end
+end
+
+function axesmenu_hide(hObject, ~)
+    disp('hiding this line');
 end
 
 function drawScanPath(hObject, ~)
