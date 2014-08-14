@@ -16,6 +16,9 @@ handles.BUTTON_HEIGHT = 25;
 handles.showWindow = false;
 handles.windowPeriod = 100;       % the height (in time) of a data window
 handles.windowHorizontalLocations = 1;  % the line locations of every horizontal window line
+handles.windowHorizontalPixelLocations = 1; % the pixel location of every 
+                                            %visible horizontal window line
+                    
 handles.windowWidth = 0;
 
 handles.closestPoint = [];
@@ -27,6 +30,17 @@ handles.region = struct(...
     'lineHandle',[],...
     'lineStyle',':');
 
+handles.regionPath = [];        % initially this is just scanData.pathObjNum
+                                % which is an array of integers that
+                                % indicate where each region is on the scan
+                                % path
+handles.dragLine = struct(...
+    'isActive', false,...
+    'isHorizontal', false,...
+    'regionIndex', 0,...
+    'isLeftBoundary',false,...
+    'horizontalLine',0);
+                                
 % check if a MPBus object was passed into varargin, otherwise just create a
 % new MPBus
 
@@ -45,6 +59,7 @@ else
 end
 
 set(handles.main, 'WindowButtonMotionFcn', @mouseMovement);
+set(handles.main, 'WindowButtonUpFcn', @mouseUp);
 
 guidata(handles.main, handles);
 
@@ -62,7 +77,8 @@ function refreshAll(handles)
     if ~isempty(handles.mpbus.fullFileName)
         drawTopView(handles);
         drawSideView(handles);
-        drawLineView(handles);
+        handles = drawLineView(handles);
+        guidata(handles.main, handles);
     end
 end
 
@@ -85,8 +101,9 @@ function drawSideView(handles, z)
     end
 end
 
-function drawLineView(handles, startingLine)
+function handles = drawLineView(handlesIn, startingLine)
     persistent lastStartingLine;
+    handles = handlesIn;
     % the number of lines to draw is based on the height of the line scan
     % axes
     if ~exist('startingLine', 'var')
@@ -116,6 +133,8 @@ function drawLineView(handles, startingLine)
     % for now, just drawing horizontal lines
     [~, visibleLocations] = ismember(handles.windowHorizontalLocations, visibleRange);
     visibleLocations(visibleLocations==0) = [];     % remove unmatched elements
+    handles.windowHorizontalPixelLocations = visibleLocations;
+    
     for location = visibleLocations
         line(domain, [location location], ...
             'color','red',...
@@ -158,37 +177,14 @@ function drawRegionInLineView(handles)
         line([x1,x1],Y,...
             'Tag','regionLine',...
             'Color',leftColor,...
-            'LineStyle',region.lineStyle);
+            'LineStyle',region.lineStyle,...
+            'ButtonDownFcn',@mouseClick_line );
         line([x2,x2],Y,...
             'Tag','regionLine',...
             'Color',rightColor,...
-            'LineStyle',region.lineStyle);
+            'LineStyle',region.lineStyle,...
+            'ButtonDownFcn',@mouseClick_line );
     end
-end
-
-function highlightRegion(handles, regionIndex)
-%{  
-persistent patchHandle;
-    
-    if ishghandle(patchHandle)
-        delete(patchHandle);
-    end
-    
-    x1 = handles.region(regionIndex).leftBoundary;
-    x2 = handles.region(regionIndex).rightBoundary;
-    
-    yBounds = get(handles.axes_lineScan, 'YLim');
-    y1 = floor(yBounds(1));
-    y2 = floor(yBounds(2));
-    
-    X = [ x1, x1, x2, x2 ];
-    Y = [ y1, y2, y2, y1 ];
-    
-    set(handles.main, 'CurrentAxes', handles.axes_lineScan);
-    patchHandle = patch(X,Y,'b', ...
-                        'FaceAlpha', 0.1, ...
-                        'EdgeColor', 'none'); 
-%}
 end
 %%%
 
@@ -224,6 +220,9 @@ function updateMousePosition(hObject)
               y_lineScan > yBoundsLine(1) && y_lineScan < yBoundsLine(2)
       
             updateMousePosition_lineScan(handles, x_lineScan, y_lineScan);
+       else
+           % reset cursor
+           set(handles.main, 'Pointer', 'arrow');
        end
    end
 end
@@ -262,19 +261,64 @@ function updateMousePosition_topView(handles, x, y)
                 
 end
 
-function updateMousePosition_lineScan(handles, x, ~)
+function updateMousePosition_lineScan(handles, x, y)
     % draw a point on the top view axes that corresponds to the pixel that
     % the cursor is over on the line scan axes
     
+    % constants: the number of pixels the cursor can be away from a line
+    MOUSE_PIXEL_WIDTH = 5;       
+    
     pixelIndex = ceil(x);
     scanPath = handles.mpbus.scanData.path;
+    regionPath = handles.regionPath;
+
     
+    % get the set of pixels near the cursor location -- if the elements are
+    % not all the same then the cursor is near a boundary
+    startIndex = pixelIndex - MOUSE_PIXEL_WIDTH;
+    endIndex = pixelIndex + MOUSE_PIXEL_WIDTH;
+    
+    if startIndex <= 0
+        startIndex = 1;
+    end
+    
+    if endIndex > length(regionPath)
+        endIndex = length(regionPath);
+    end
+    
+    localRegion = regionPath(startIndex : endIndex);
+    
+    % check if cursor is near vertical line
+    if min(localRegion) ~= max(localRegion)
+        set(handles.main, 'Pointer', 'left');
+    else
+        set(handles.main, 'Pointer', 'arrow');
+    end
+    
+    % check if cursor is near horizontal line
+    isHorizontal = closeToHorizontalLine(handles, y);
+    
+    if isHorizontal 
+        set(handles.main, 'Pointer', 'top');
+    end
+
     if pixelIndex > 0 && pixelIndex <= length(scanPath)
         x_topView = scanPath(pixelIndex,1);
         y_topView = scanPath(pixelIndex,2);    
         
         drawPoint( handles.axes_topView, x_topView, y_topView );
+        updateDrag(handles, pixelIndex, floor(y) );
     end
+end
+
+function [ isClose, horizontalLine] = closeToHorizontalLine(handles, lineNumber)
+    MOUSE_PIXEL_HEIGHT = 5;
+    
+    distance = abs( handles.windowHorizontalPixelLocations - lineNumber );
+    
+    foundIndex = find(distance < MOUSE_PIXEL_HEIGHT, 1);
+    horizontalLine = handles.windowHorizontalPixelLocations(foundIndex);
+    isClose = ~isempty(foundIndex);
 end
 
 function closestPoint = getClosestPoint(lineHandle, x, y)
@@ -318,15 +362,21 @@ function drawPoint(axesHandle, x, y)
 end
 
 
-function createRegions(handles)
+function handles = createRegions(handlesIn)
     % the line scan data is captured along the entire scan path, determine
     % where regions are from the scanCoords in scanData
     % the pathObjNum array in scanData is nonzero when the path is within a
     % scan region. (The number indicates which region number it is)
+    handles = handlesIn;
     scanData = handles.mpbus.scanData;
        
     if ~isempty(scanData)
-        regionPath = scanData.pathObjNum;
+        if isempty(handles.regionPath)
+            regionPath = scanData.pathObjNum;
+        else
+            regionPath = handles.regionPath;
+        end
+        
         regionIndex = 0;
         for pixelIndex = 1 : length(regionPath)
            if regionPath(pixelIndex) ~= regionIndex
@@ -349,53 +399,191 @@ function createRegions(handles)
            end
         end
         
-        guidata(handles.main, handles);
+        % save the region path -- all other functions will use
+        % handles.regionPath instead of scanData.pathObjNum
+        handles.regionPath = regionPath;
     end
 end
 
-
-%%% Callbacks
-function mouseClick_top(hObject, ~)
-    persistent lastRegionIndex;
-    % TODO: REMOVE the need to user a persistent variable here
-    % Ideally there should be one 'activate region' function that controls
-    % this
+function activateRegion(handles, regionIndex)
+    % highlight the selected region line in the top view
+    allLines = findall(handles.axes_topView, 'Tag', 'windowLine');
+    set(allLines, ...
+        'LineStyle', ':',...
+        'Color', 'blue');
     
-    if isempty(lastRegionIndex)
-        lastRegionIndex = 0;
+    regionLine = findall(handles.axes_topView, 'UserData', regionIndex);
+    set(regionLine, ...
+        'LineStyle', '-',...
+        'Color', 'cyan');
+                
+    % then update the region line style in the line scan view
+    
+    for index = 1 : length(handles.region)
+        if index == regionIndex
+            handles.region(index).lineStyle = '-';
+        else
+            handles.region(index).lineStyle = ':';
+        end
     end
     
+    handles = drawLineView(handles);
+    
+    guidata(handles.main, handles);
+    
+end
+
+function handles = activateDrag(handlesIn, regionIndex, isLeftBoundary,...
+                                isHorizontal, horizontalLine )
+    % the left or right boundaries of a region can be dragged
+    % if isHorizontalLines is true then instead of dragging vertical region
+    % lines, user will be dragging the horizontal lines
+    handles = handlesIn;
+    handles.dragLine.isHorizontal = isHorizontal;
+    handles.dragLine.isLeftBoundary = isLeftBoundary;
+    handles.dragLine.regionIndex = regionIndex;    
+    
+    if ~exist('horizontalLine', 'var')
+        horizontalLine = 0;
+    end
+    
+    handles.dragLine.horizontalLine = horizontalLine;
+    
+    if regionIndex > 0 || isHorizontal
+       handles.dragLine.isActive = true;
+    else
+        handles.dragLine.isActive = false;
+    end
+end
+
+function handles = deactivateDrag(handlesIn)
+    handles = handlesIn;
+    handles.dragLine.isActive = false;
+    handles.dragLine.isHorizontal = false;
+    
+    dragHandle = findall(handles.axes_lineScan, 'Tag', 'dragLine');
+    if ishghandle(dragHandle)
+        xdata = get(dragHandle, 'XData');
+        pixelIndex = floor( xdata(1) );
+        if pixelIndex <= 0
+            pixelIndex = 1;
+        end
+        handles = updateRegionWidth(handles, ...
+                                    handles.dragLine.regionIndex,...
+                                    handles.dragLine.isLeftBoundary,...
+                                    pixelIndex);
+    end
+    disp('--------');
+end
+
+function updateDrag(handles, pixelIndex, lineIndex)
+    persistent dragHandle;
+    PERIOD_CHANGE = 1;
+    %TODO need to clean up the horizontal line behavior (too clunky atm)
+    
+    if handles.dragLine.isActive
+        if handles.dragLine.isHorizontal
+            % horizontal drag
+            if lineIndex < handles.dragLine.horizontalLine 
+                % reduce the horizontal period (distance between horizontal
+                % lines)
+                handles.windowPeriod = handles.windowPeriod - PERIOD_CHANGE;
+            else
+                % increase the horizontal period
+                handles.windowPeriod = handles.windowPeriod + PERIOD_CHANGE;
+            end
+            handles.windowHorizontalLocations = ...
+                                    1:handles.windowPeriod:handles.nLines;
+            guidata(handles.main, handles);
+        else
+            % vertical drag
+            Y = get(handles.axes_lineScan, 'YLim');
+            if ishghandle(dragHandle)
+                if pixelIndex > 0 && pixelIndex <= length(handles.regionPath)
+                    set(dragHandle, 'XData', [pixelIndex, pixelIndex], 'YData', Y);
+                end
+            else
+                dragHandle = line( [pixelIndex, pixelIndex], Y, ...
+                                    'Color', 'cyan',...
+                                    'LineStyle', ':',...
+                                    'Tag','dragLine');
+            end
+        end
+    end
+end
+
+function handles = updateRegionWidth(...
+                    handlesIn, regionIndex, isLeftBoundary, newPixelIndex)
+    % a new area in the regionPath will be filled with the regionIndex, or
+    % a new area will be zeroed out to effectively change the width
+    % of a region as defined in regionPath
+    
+    % if newPixelIndex - (bounary location) is positive, then add new
+    % nonzero elements to regionPath
+    % if it's negative, add zeros to regionPath
+    handles = handlesIn;
+
+    if regionIndex > 0
+        % check that the new region (as indicated by newPixelIndex) does not
+        % include a region other than the one indicated by regionIndex
+        bounds = [ newPixelIndex, handles.region(regionIndex).leftBoundary ];
+        newRegion = handles.regionPath( min(bounds) : max(bounds) );
+        invalidElements = newRegion(newRegion > 0 & newRegion ~= regionIndex);
+        
+        if ~isempty(invalidElements)
+            return;
+        end
+        
+        if isLeftBoundary
+            boundaryIndex = handles.region(regionIndex).leftBoundary;
+            
+            if boundaryIndex - newPixelIndex < 0
+                newValue = 0;
+            else 
+                newValue = regionIndex;
+            end
+            
+            if newPixelIndex > handles.region(regionIndex).rightBoundary
+                return;
+            end
+        else
+            boundaryIndex = handles.region(regionIndex).rightBoundary;
+            
+            if boundaryIndex - newPixelIndex < 0
+                newValue = regionIndex;
+            else 
+                newValue = 0;
+            end
+            
+            if newPixelIndex < handles.region(regionIndex).leftBoundary
+                return;
+            end
+        end
+        
+        bounds = [ newPixelIndex, boundaryIndex ];
+        handles.regionPath( min(bounds) : max(bounds) ) = newValue;
+        
+    end
+end
+%%% Callbacks
+function mouseClick_top(hObject, ~)
+
     handles = guidata(hObject);
     if ishghandle(handles.closestLineHandle)
         % if the user clicked within the topView axes, highlight the region
         % (in the lineScan axes) that corresponds to the closestPoint line
 
         regionIndex = get(handles.closestLineHandle, 'UserData');
-        
-        if regionIndex ~= lastRegionIndex
-            allLines = findall(handles.axes_topView, 'Tag', 'windowLine');
-            set(allLines, ...
-                'LineStyle', ':',...
-                'Color', 'blue');
-        
-            handles.region(regionIndex).lineStyle = '-';
-            set(handles.closestLineHandle, ...
-                'LineStyle', '-',...
-                'Color', 'cyan');
-            if lastRegionIndex > 0
-                handles.region(lastRegionIndex).lineStyle = ':';
-            end
-
-            guidata(handles.main, handles);
-            lastRegionIndex = regionIndex;
-
-            drawLineView(handles);
-        end
+        activateRegion(handles, regionIndex);
     end
 end
 
 function mouseClick_line(hObject, ~)
     % called when user clicks within the lineScan axes
+    % begin dragging mode (determine which region and line to move)
+    % when the mouse button is released, dragging mode will be disabled
+    MOUSE_PIXEL_WIDTH = 5; 
+    
     handles = guidata(hObject);
     
     mouseLocation = get(handles.axes_lineScan, 'CurrentPoint');
@@ -406,34 +594,44 @@ function mouseClick_line(hObject, ~)
     end
     
     % if the user clicked within a region, highlight it
-    scanData = handles.mpbus.scanData;
-    if ~isempty(scanData)
-        regionIndex = scanData.pathObjNum(pixelIndex);
-
-        for index = 1 : length(handles.region)
-            if index == regionIndex
-                handles.region(index).lineStyle = '-';
-            else
-                handles.region(index).lineStyle = ':';
-                % also, update the line in the top view axes
-                allLines = findall(handles.axes_topView, 'Tag', 'windowLine');
-                set(allLines, ...
-                    'LineStyle', ':',...
-                    'Color', 'blue');
-                
-                regionLine = findall(handles.axes_topView, 'UserData', regionIndex);
-                set(regionLine, ...
-                    'LineStyle', '-',...
-                    'Color', 'cyan');
-            end
+    regionPath = handles.regionPath;
+    if ~isempty(regionPath)
+        % check to see if the cursor is close to a region
+        startIndex = pixelIndex - MOUSE_PIXEL_WIDTH;
+        endIndex = pixelIndex + MOUSE_PIXEL_WIDTH;
+        if startIndex <= 0
+            startIndex = 1;
         end
-        guidata(handles.main, handles);
-        drawRegionInLineView(handles);
+        if endIndex > length(regionPath)
+            endIndex = length(regionPath);
+        end
+            
+        localRegion = regionPath(startIndex : endIndex);
+        
+        % determine if this is the left or the right boundary
+        if localRegion(1) < localRegion(end)
+            isLeftBoundary = true;
+        else
+            isLeftBoundary = false;
+        end
+        
+        % check if the cursor is close to a horizontal line (this will
+        % supersede the vertical line drag)
+        [isHorizontal, horizontalLine] = ...
+                       closeToHorizontalLine( handles, mouseLocation(1,2) );
+        
+        if min(localRegion) ~= max(localRegion) || isHorizontal 
+            handles = activateDrag(handles,  max(localRegion),...
+                            isLeftBoundary, isHorizontal, horizontalLine );
+        end
+        
+        activateRegion(handles, max(localRegion));
     end
 end
 
 function mouseMovement(hObject, ~)
     updateMousePosition(hObject);
+    
 %{  
 persistent lastMoveTime;
     currentTime = clock;
@@ -457,7 +655,8 @@ function slider_lineScan_Callback(hObject, ~)
     max = get(hObject, 'Max');
     line = max - sliderValue + 1;
     
-    drawLineView(handles, line);
+    handles = drawLineView(handles, line);
+    guidata(handles.main, handles);
 end
 
 function slider_sideView_Callback(hObject, ~)
@@ -518,23 +717,22 @@ function loadFile(hObject, ~)
    handles.windowHorizontalLocations = ...
                                     1:handles.windowPeriod:handles.nLines;
     
-    % draw image
-    drawTopView(handles);
-    drawSideView(handles, 1);
-    drawLineView(handles, 1);
     
     
     % setup the sliders
     range = [1, (handles.mpbus.ysize * handles.mpbus.numFrames)];
     handles = createLineSlider(handles, range, 10, 100);
     
-    guidata(hObject, handles); % Update handles structure
     
     % setup region boundaries
-    createRegions(handles);
+    handles = createRegions(handles);
     
-    % and display the regions in the line scan axes
-    drawRegionInLineView(handles);
+    % draw image
+    drawTopView(handles);
+    drawSideView(handles, 1);
+    handles = drawLineView(handles);
+    
+    guidata(hObject, handles); % Update handles structure
     
 end
 
@@ -694,6 +892,19 @@ function displayTimeInterval(hObject, ~)
     handles = guidata(hObject);
     
     handles.showWindow = true;
+    
+    guidata(handles.main, handles);
+end
+
+function mouseUp(hObject, ~)
+    handles = guidata(hObject);
+    handles = deactivateDrag(handles);
+    
+    % then recreate the regions
+    handles = createRegions(handles);
+    
+    % and redraw the linescan axes
+    handles = drawLineView(handles);
     
     guidata(handles.main, handles);
 end
@@ -881,7 +1092,7 @@ handles.panel_lineScan = uipanel(...
 
 handles.axes_lineScan = axes(...
     'Parent',handles.panel_lineScan,...
-    'Position',[0.09 0.088 0.88 0.9],...
+    'Position',[0.02 0.088 0.955 0.9],...
     'XTick', [],...
     'YTick', [],...
     'Tag','axes_lineScan' );
