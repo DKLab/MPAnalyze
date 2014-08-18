@@ -9,9 +9,8 @@ handles = createGUI();
 
 % Constants:
 handles.SLIDER_WIDTH = 20;
-handles.BUTTON_WIDTH = 60;
-handles.BUTTON_HEIGHT = 25;
 
+handles.MINIMUM_WINDOW_PERIOD = 15;
 % Data window specs (values are modified by the user through the GUI)
 handles.showWindow = false;
 handles.windowPeriod = 100;       % the height (in time) of a data window
@@ -29,6 +28,9 @@ handles.region = struct(...
     'rightBoundary',0,...
     'lineHandle',[],...
     'lineStyle',':');
+
+handles.activeRegion = [];  % will contain a single region struct from
+                            % the stuct array handles.region
 
 handles.regionPath = [];        % initially this is just scanData.pathObjNum
                                 % which is an array of integers that
@@ -429,6 +431,18 @@ function activateRegion(handles, regionIndex)
     
     handles = drawLineView(handles);
     
+    controlHandles = findall(handles.panel_controls,...
+                                'Tag', 'activeRegionControl');
+    
+    % save this as the active region
+    if regionIndex > 0
+        handles.activeRegion = handles.region(regionIndex);
+        set(controlHandles, 'Enable','on');
+    else
+        handles.activeRegion = [];
+        set(controlHandles, 'Enable','off');
+    end
+     
     guidata(handles.main, handles);
     
 end
@@ -457,44 +471,71 @@ function handles = activateDrag(handlesIn, regionIndex, isLeftBoundary,...
 end
 
 function handles = deactivateDrag(handlesIn)
-    handles = handlesIn;
-    handles.dragLine.isActive = false;
-    handles.dragLine.isHorizontal = false;
-    
+    handles = handlesIn; 
     dragHandle = findall(handles.axes_lineScan, 'Tag', 'dragLine');
+    
     if ishghandle(dragHandle)
-        xdata = get(dragHandle, 'XData');
-        pixelIndex = floor( xdata(1) );
-        if pixelIndex <= 0
-            pixelIndex = 1;
-        end
-        handles = updateRegionWidth(handles, ...
+        if handles.dragLine.isHorizontal
+            % horizontal drag
+            ydata = get(dragHandle, 'YData');
+            lineIndex = floor( ydata(1) );
+            
+            if lineIndex <= 0
+                lineIndex = 1;
+            end
+            
+            % change the window period s.t. the difference between the line
+            % index and the original location of the line
+            % (dragline.horizontalLine) is equal to the difference in
+            % window period
+            difference = handles.dragLine.horizontalLine - lineIndex;
+            handles.windowPeriod = handles.windowPeriod - difference; 
+            
+            if handles.windowPeriod < handles.MINIMUM_WINDOW_PERIOD
+                handles.windowPeriod = handles.MINIMUM_WINDOW_PERIOD;
+            end
+            
+            handles.windowHorizontalLocations = ...
+                                    1:handles.windowPeriod:handles.nLines;
+        else
+            % vertical drag
+            xdata = get(dragHandle, 'XData');
+            pixelIndex = floor( xdata(1) );
+            
+            if pixelIndex <= 0
+                pixelIndex = 1;
+            end
+            
+            handles = updateRegionWidth(handles, ...
                                     handles.dragLine.regionIndex,...
                                     handles.dragLine.isLeftBoundary,...
                                     pixelIndex);
+        end
     end
-    disp('--------');
+    
+    handles.dragLine.isActive = false;
+    handles.dragLine.isHorizontal = false;
 end
 
 function updateDrag(handles, pixelIndex, lineIndex)
     persistent dragHandle;
-    PERIOD_CHANGE = 1;
-    %TODO need to clean up the horizontal line behavior (too clunky atm)
-    
+
     if handles.dragLine.isActive
         if handles.dragLine.isHorizontal
             % horizontal drag
-            if lineIndex < handles.dragLine.horizontalLine 
-                % reduce the horizontal period (distance between horizontal
-                % lines)
-                handles.windowPeriod = handles.windowPeriod - PERIOD_CHANGE;
+            X = get(handles.axes_lineScan, 'XLim');
+            yBounds = get(handles.axes_lineScan, 'YLim');
+            
+            if ishghandle(dragHandle)   
+                if lineIndex >= yBounds(1) && lineIndex <= yBounds(2)
+                    set(dragHandle, 'XData', X, 'YData', [lineIndex, lineIndex]);
+                end
             else
-                % increase the horizontal period
-                handles.windowPeriod = handles.windowPeriod + PERIOD_CHANGE;
+                dragHandle = line( X, [lineIndex, lineIndex], ...
+                                    'Color', 'red',...
+                                    'LineStyle', ':',...
+                                    'Tag','dragLine');
             end
-            handles.windowHorizontalLocations = ...
-                                    1:handles.windowPeriod:handles.nLines;
-            guidata(handles.main, handles);
         else
             % vertical drag
             Y = get(handles.axes_lineScan, 'YLim');
@@ -886,16 +927,6 @@ function selectColormap(hObject, ~, colormap)
     refreshAll(handles);
 end
 
-function displayTimeInterval(hObject, ~)
-    % draw windows on the scan data to indicate regions that will be
-    % calculated
-    handles = guidata(hObject);
-    
-    handles.showWindow = true;
-    
-    guidata(handles.main, handles);
-end
-
 function mouseUp(hObject, ~)
     handles = guidata(hObject);
     handles = deactivateDrag(handles);
@@ -907,6 +938,16 @@ function mouseUp(hObject, ~)
     handles = drawLineView(handles);
     
     guidata(handles.main, handles);
+end
+
+function exportActiveRegion(hObject, ~)
+    % export the active region
+    handles = guidata(hObject);
+    
+    domain = [ handles.activeRegion.leftBoundary,...
+                handles.activeRegion.rightBoundary ];
+    
+    exportWindow(handles.mpbus, domain, handles.windowPeriod, true); 
 end
 %%%
 
@@ -1028,6 +1069,8 @@ end
 
 
 function handles = createGUI()
+    handles.BUTTON_WIDTH = 80;
+    handles.BUTTON_HEIGHT = 25;
 
 handles.main = figure(...
     'Units','characters',...
@@ -1044,10 +1087,24 @@ handles.main = figure(...
 %%% CONTROLS
 handles.panel_controls = uipanel(...
     'Parent',handles.main,...
-    'Title','Controls',...
+    'Title','Active Region',...
     'Clipping','on',...
     'Position',[0.014 0.46 0.15 0.5],...
     'Tag','panel_controls' );
+
+panel_bounds = getpixelposition(handles.panel_controls);
+buttonWidth = handles.BUTTON_WIDTH / panel_bounds(3);
+buttonHeight = handles.BUTTON_HEIGHT / panel_bounds(4);
+
+handles.button_export = uicontrol(...
+    'Parent',handles.panel_controls,...
+    'Style','pushbutton',...
+    'Units','normalized',...
+    'Position',[(1-buttonWidth)/2, 0.1, buttonWidth, buttonHeight],...
+    'String','Export',...
+    'Callback',@exportActiveRegion,...
+    'Tag','activeRegionControl',...
+    'Enable','off' );
 %%%
 
 %%% TOP VIEW
