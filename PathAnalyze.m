@@ -31,6 +31,7 @@ handles.region = struct(...
 
 handles.activeRegion = [];  % will contain a single region struct from
                             % the stuct array handles.region
+handles.activeRegionIndex = 0;
 
 handles.regionPath = [];        % initially this is just scanData.pathObjNum
                                 % which is an array of integers that
@@ -77,10 +78,21 @@ function refreshAll(handles)
     set(handles.menu_drawScanPath, 'Checked', 'off');
     
     if ~isempty(handles.mpbus.fullFileName)
+        % reset the regions before drawing anything
+        handles.regionPath = handles.mpbus.scanData.pathObjNum;
+        activateRegion(handles, 0);
+        handles.windowPeriod = 100;
+        handles.windowHorizontalLocations = ...
+                                    1:handles.windowPeriod:handles.nLines;
+                                
+        handles = createRegions(handles);
+        
         drawTopView(handles);
         drawSideView(handles);
         handles = drawLineView(handles);
         guidata(handles.main, handles);
+        
+        drawScanRegion(handles.main, []);
     end
 end
 
@@ -390,13 +402,22 @@ function handles = createRegions(handlesIn)
                     % boundary was encountered)
                     handles.region(regionIndex).rightBoundary = pixelIndex;
                     
+                    % update the active region as well
+                    if regionIndex == handles.activeRegionIndex
+                        handles.activeRegion.rightBoundary = pixelIndex;
+                    end
+                    
                     % then update the regionIndex for the next iteration
-                    % (we already know this has to be 0)
                     regionIndex = 0;
                 else
                     % the region has begun, update the region index first
                     regionIndex = regionPath(pixelIndex);
                     handles.region(regionIndex).leftBoundary = pixelIndex;
+                    
+                    % update the active region as well
+                    if regionIndex == handles.activeRegionIndex
+                        handles.activeRegion.leftBoundary = pixelIndex;
+                    end
                 end
            end
         end
@@ -437,9 +458,11 @@ function activateRegion(handles, regionIndex)
     % save this as the active region
     if regionIndex > 0
         handles.activeRegion = handles.region(regionIndex);
+        handles.activeRegionIndex = regionIndex;
         set(controlHandles, 'Enable','on');
     else
         handles.activeRegion = [];
+        handles.activeRegionIndex = 0;
         set(controlHandles, 'Enable','off');
     end
      
@@ -775,6 +798,7 @@ function loadFile(hObject, ~)
     
     guidata(hObject, handles); % Update handles structure
     
+    drawScanRegion(handles.main, []);
 end
 
 function drawScanRegion(hObject, ~)
@@ -947,9 +971,30 @@ function exportActiveRegion(hObject, ~)
     domain = [ handles.activeRegion.leftBoundary,...
                 handles.activeRegion.rightBoundary ];
     
-    exportWindow(handles.mpbus, domain, handles.windowPeriod, true); 
+    exportWindow(handles.mpbus, domain, handles.windowPeriod,...
+                                        true, handles.colormap); 
 end
-%%%
+
+function mouseWheelScroll(hObject, eventdata)
+    SCROLL_FACTOR = 100;
+    
+    % set the new slider value and run its callback
+    handles = guidata(hObject);
+    
+    sliderValue = get(handles.slider_lineScan, 'Value');
+    newValue = sliderValue - SCROLL_FACTOR * eventdata.VerticalScrollCount;
+    
+    minValue = get(handles.slider_lineScan, 'Min');
+    maxValue = get(handles.slider_lineScan, 'Max');
+    
+    newValue = min( [ max([newValue, minValue]), maxValue ] );
+    
+    
+    set(handles.slider_lineScan, 'Value', newValue );
+    
+    slider_lineScan_Callback(handles.slider_lineScan, []);
+end
+%%% END CALLBACKS
 
 
 function handles = createSideSlider(handlesToUpdate, range, ticks_click, ticks_drag)
@@ -1082,7 +1127,8 @@ handles.main = figure(...
     'NumberTitle','off',...
     'Position',[40 4 200 50],...
     'Tag','figure1',...
-    'Visible','on' );
+    'Visible','on',...
+    'WindowScrollWheelFcn', @mouseWheelScroll);
 
 %%% CONTROLS
 handles.panel_controls = uipanel(...
