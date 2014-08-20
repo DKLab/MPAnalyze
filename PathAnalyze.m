@@ -452,10 +452,10 @@ function activateRegion(handles, regionIndex)
     
     handles = drawLineView(handles);
     
-    controlHandles = findall(handles.panel_controls,...
-                                'Tag', 'activeRegionControl');
     
     % save this as the active region
+    controlHandles = findall(handles.panel_controls,...
+                                'Tag', 'activeRegionControl');
     if regionIndex > 0
         handles.activeRegion = handles.region(regionIndex);
         handles.activeRegionIndex = regionIndex;
@@ -467,7 +467,28 @@ function activateRegion(handles, regionIndex)
     end
      
     guidata(handles.main, handles);
+    displayWidthChange(handles);
+end
+
+function displayWidthChange(handles, changeInWidth)
     
+    if ~exist('changeInWidth', 'var')
+        regionWidth = handles.activeRegion.rightBoundary - ...
+                handles.activeRegion.leftBoundary + 1;
+    else
+        regionWidth = str2double(get(handles.edit_regionWidth, 'String'));
+        
+        if isnan(regionWidth)
+            regionWidth = changeInWidth;
+        else
+            regionWidth = regionWidth + changeInWidth;
+        end
+        
+    end
+    
+    widthString = sprintf('%d', regionWidth);
+    set(handles.edit_regionWidth, 'String', widthString);
+
 end
 
 function handles = activateDrag(handlesIn, regionIndex, isLeftBoundary,...
@@ -610,6 +631,8 @@ function handles = updateRegionWidth(...
             if newPixelIndex > handles.region(regionIndex).rightBoundary
                 return;
             end
+            
+            widthDifference = boundaryIndex - newPixelIndex;
         else
             boundaryIndex = handles.region(regionIndex).rightBoundary;
             
@@ -622,10 +645,15 @@ function handles = updateRegionWidth(...
             if newPixelIndex < handles.region(regionIndex).leftBoundary
                 return;
             end
+            
+            widthDifference = newPixelIndex - boundaryIndex;
         end
         
         bounds = [ newPixelIndex, boundaryIndex ];
         handles.regionPath( min(bounds) : max(bounds) ) = newValue;
+        
+        % update the region width edit box
+        displayWidthChange(handles, widthDifference);
         
     end
 end
@@ -1112,7 +1140,8 @@ function handles = createLineSlider(handlesToUpdate, range, ticks_click, ticks_d
         'SliderStep', [ticks_click/maxValue , ticks_drag/maxValue ]);
 end
 
-
+% TODO: Seperate createGUI into at least two functions so that controls can be
+% redrawn to correct size when the window is resized
 function handles = createGUI()
     handles.BUTTON_WIDTH = 80;
     handles.BUTTON_HEIGHT = 25;
@@ -1141,6 +1170,33 @@ handles.panel_controls = uipanel(...
 panel_bounds = getpixelposition(handles.panel_controls);
 buttonWidth = handles.BUTTON_WIDTH / panel_bounds(3);
 buttonHeight = handles.BUTTON_HEIGHT / panel_bounds(4);
+
+
+labelWidth = buttonWidth;
+labelHeight = buttonHeight;
+labelX = (1-labelWidth)/2;
+
+editWidth = buttonWidth;
+editHeight = buttonHeight;
+editX = labelX + (labelWidth - editWidth)/2;
+
+handles.label_regionWidth = uicontrol(...
+    'Parent', handles.panel_controls,...
+    'Style', 'text',...
+    'Units', 'normalized',...
+    'Position', [ labelX, 0.7, labelWidth, labelHeight ],...
+    'Tag','activeRegionControl',...
+    'String', 'Region Width',...
+    'Enable','off' );
+
+handles.edit_regionWidth = uicontrol(...
+    'Parent', handles.panel_controls,...
+    'Style', 'edit',...
+    'Units', 'normalized',...
+    'Position', [ editX, 0.65, editWidth, editHeight ],...
+    'Tag','activeRegionControl',...
+    'String', '',...
+    'Enable','off' );
 
 handles.button_export = uicontrol(...
     'Parent',handles.panel_controls,...

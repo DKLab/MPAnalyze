@@ -16,6 +16,7 @@ function exportWindow( mpbus, domain, windowPeriod, showGUI, defaultColormap )
     handles.DEFAULT_FPS = 12;
     handles.colormap = defaultColormap;  
     handles.frameNumber = 1;
+    handles.filename = '';
     
     if showGUI
         handles.imageWidth = (domain(2) - domain(1) + 1) * IMAGE_SCALE_FACTOR;
@@ -40,7 +41,6 @@ function exportWindow( mpbus, domain, windowPeriod, showGUI, defaultColormap )
 end
 
 function handles = readFrames(handlesIn)
-    EXPORT_FILE_NAME = 'temp_export.mat';
     handles = handlesIn;
     domain = handles.domain;
      
@@ -49,7 +49,7 @@ function handles = readFrames(handlesIn)
     nFrames = floor( handles.mpbus.ysize * handles.mpbus.numFrames / frameHeight );
     
     % TESTING -- just loading 100 frames for now
-    nFrames = 100;
+    %nFrames = 100;
     % END TESTING
     
     % initialize a waitbar
@@ -217,6 +217,9 @@ function resize_callback(hObject, ~)
 end
 
 function calculateDiameter(hObject, ~)
+    handles = guidata(hObject);
+    addpath('Calculate');
+    vesselDiameter(handles.imageData);
 end
 
 function calculateIntensity(hObject, ~)
@@ -225,8 +228,65 @@ end
 function calculateVelocity(hObject, ~)
 end
 
-function loadFile(hObject, ~)
+function openFile(hObject, ~)
+    handles = guidata(hObject);
+    
+    [filename, pathname, filterIndex] = uigetfile({'*.mat'},'Open File');
+    
+    if filterIndex > 0
+        dataStruct = load( [ pathname filename] );
+        
+        if isfield(dataStruct, 'data')
+            handles.imageData = dataStruct.data;
+            handles.imageWidth = size(handles.imageData, 2);
+            handles.imageHeight = size(handles.imageData, 1);
+            handles.colormap = dataStruct.colormap;
+            
+            guidata(handles.main, handles);
+            resize_callback(handles.main, []);
+        else
+            % the file selected was invalid
+            errorString = sprintf('The file "%s" does not contain image data.',...
+                                    filename);
+            errordlg(errorString,'File Error');
+        end
+        
+    end
+    
 end
+
+function saveFile(hObject, ~)
+    handles = guidata(hObject);
+    
+    if strcmp(handles.filename, '')
+        saveAsFile(hObject, []);
+    else
+        data = handles.imageData;
+        colormap = handles.colormap;
+        save(handles.filename, 'data', 'colormap');
+    end
+end
+
+function saveAsFile(hObject, ~)
+    % let the user choose a new filename, then save the file by calling
+    % saveFile()
+    handles = guidata(hObject);
+    
+    defaultFilename = sprintf('linescan_%s.mat', date); 
+    [filename, path, filterIndex] = uiputfile(defaultFilename,'Save file as...');
+
+    if filterIndex > 0
+        [~,~,extension] = fileparts(filename);
+        if strcmp(extension, '.mat')
+            handles.filename = [ path filename ];
+        end
+        
+        guidata(handles.main, handles);
+        saveFile(handles.main, []);
+    end
+  
+end
+
 
 function selectColormap(hObject, ~, colormap)
     handles = guidata(hObject);
@@ -263,20 +323,37 @@ function handles = createFigure(handlesIn, figureWidth, figureHeight)
         'Visible','on',...
         'ResizeFcn', @resize_callback);
     
+    handles = populateGUI(handles, figureWidth, figureHeight);
+end
+function handles = createMenu(handlesIn)
+    handles = handlesIn;
     
     %%% UI MENU
     handles.menu_file = uimenu(...
         'Parent',handles.main,...
         'Label','File',...
         'Tag','menu_file' );
-
+    
     handles.menu_open = uimenu(...
         'Parent',handles.menu_file,...
-        'Accelerator','O',...
-        'Callback',@loadFile,...
+        'Accelerator','o',...
+        'Callback',@openFile,...
         'Label','Open...',...
         'Tag','menu_open' );
-
+    
+    handles.menu_save = uimenu(...
+        'Parent',handles.menu_file,...
+        'Accelerator','s',...
+        'Callback',@saveFile,...
+        'Label','Save',...
+        'Tag','menu_save' );
+    
+    handles.menu_saveAs = uimenu(...
+        'Parent',handles.menu_file,...
+        'Callback',@saveAsFile,...
+        'Label','Save As...',...
+        'Tag','menu_saveAs' );
+    
     handles.menu_image = uimenu(...
         'Parent',handles.main,...
         'Label','Image',...
@@ -387,15 +464,13 @@ function handles = createFigure(handlesIn, figureWidth, figureHeight)
 
     %%%
    
-    handles = populateGUI(handles, figureWidth, figureHeight);
 end
-
 function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     MAX_MAGNIFICATION = 3;      % don't enlarge the image by a factor any
                                 % larger than this
     PIXEL_PADDING = 5;
     
-    handles = handlesIn;
+    handles = createMenu(handlesIn);
     
     %%% Control Panel
     panelWidth = 0.4;
