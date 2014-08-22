@@ -1,6 +1,16 @@
 function staDataStruct = staAnalyzer(varargin)
 
-mpbus = varargin{1};
+if nargin > 0
+    mpbus = varargin{1};
+else
+    mpbus = [];
+end
+    
+if ~isa(mpbus, 'MPBus')
+    disp('MPBus not found. Install and run the STA using MPAnalze.');
+    return;
+end
+
 workspaceList = mpbus.variables();
 
 if isempty(workspaceList)
