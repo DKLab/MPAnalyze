@@ -16,7 +16,9 @@ function exportWindow( mpbus, domain, windowPeriod, showGUI, defaultColormap )
     handles.DEFAULT_FPS = 12;
     handles.colormap = defaultColormap;  
     handles.frameNumber = 1;
+    handles.frameOffset = 0;        % used for cropping frames
     handles.filename = '';
+    handles.nFrames = 0;
     
     if showGUI
         handles.imageWidth = (domain(2) - domain(1) + 1) * IMAGE_SCALE_FACTOR;
@@ -41,15 +43,16 @@ function exportWindow( mpbus, domain, windowPeriod, showGUI, defaultColormap )
 end
 
 function handles = readFrames(handlesIn)
+    % read in image data
     handles = handlesIn;
     domain = handles.domain;
-     
     frameWidth = domain(2) - domain(1) + 1;
     frameHeight = handles.windowPeriod;
     nFrames = floor( handles.mpbus.ysize * handles.mpbus.numFrames / frameHeight );
     
+    
     % TESTING -- just loading 100 frames for now
-    %nFrames = 100;
+     nFrames = 100;
     % END TESTING
     
     % initialize a waitbar
@@ -219,7 +222,8 @@ end
 function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
     addpath('Calculate');
-    vesselDiameter(handles.imageData);
+    % testing -- calculate just the current frame for now
+    vesselDiameter(handles.imageData(:,:,handles.frameNumber));
 end
 
 function calculateIntensity(hObject, ~)
@@ -305,6 +309,83 @@ function selectColormap(hObject, ~, colormap)
     drawFrame(handles);
 end
 
+function removeRange_callback(hObject, ~)
+    % check to see that what the user entered into the 'remove frames' edit
+    % box is a valid range
+    handles = guidata(hObject);
+    userInput = get(hObject, 'String');
+    subStringList = regexp(userInput, ':', 'split');
+   
+    
+    if length(subStringList) == 2
+
+        handles.cutStart = floor(str2double(subStringList{1}));
+        
+        if strcmp(subStringList{2}, 'end')
+            handles.cutEnd = handles.nFrames;
+        else
+            handles.cutEnd = floor(str2double(subStringList{2}));
+        end
+
+        if isnan(handles.cutStart) || isnan(handles.cutEnd)
+            % an invalid range was specified
+            handles.cutStart = 0;
+            handles.cutEnd = 0;
+
+            displayString = '';
+        else
+            % cutStart and cutEnd are now numerical. Make sure they are within
+            % the maximum possible range
+            if handles.cutStart < 1
+                handles.cutStart = 1;
+            end
+
+            if handles.cutEnd > handles.nFrames
+                handles.cutEnd = handles.nFrames;
+            end
+
+            if handles.cutStart > handles.cutEnd
+                newCutEnd = handles.cutStart;
+                handles.cutStart = handles.cutEnd;
+                handles.cutEnd = newCutEnd;
+            end
+            
+            displayString = sprintf('%d:%d', handles.cutStart, handles.cutEnd);
+        end
+
+        
+    elseif length(subStringList) == 1
+        % just cut 1 frame (no range)
+        handles.cutStart = floor(str2double(subStringList{1}));
+        
+        if isnan(handles.cutStart)
+            handles.cutStart = 1;
+        end
+        
+        if handles.cutStart < 1
+            handles.cutStart = 1;
+        end
+        
+        if handles.cutStart > handles.nFrames
+            handles.cutStart = handles.nFrames;
+        end
+        
+        handles.cutEnd = handles.cutStart;
+        
+        displayString = sprintf('%d:%d', handles.cutStart, handles.cutEnd);
+    else
+        displayString = '';
+    end
+    
+    set(hObject, 'String', displayString);
+    guidata(handles.main, handles);
+end
+
+function removeButton_callback(hObject, ~)
+    handles = guidata(hObject);
+    
+    % TODO remove the frames
+end
 %%% END CALLBACKS
 
 function handles = createFigure(handlesIn, figureWidth, figureHeight)
@@ -479,7 +560,7 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     editWidth = 50 / ( panelWidth * figureWidth );
     editHeight = 20 / ( panelHeight * figureHeight );
     labelWidth = 2 * editWidth;
-    labelX = 0.05;
+    labelX = 0;
     editX = labelX + labelWidth + 2 * PIXEL_PADDING / figureWidth;
     
     handles.panel_controls = uipanel(...
@@ -521,6 +602,35 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
         'String', handles.DEFAULT_FPS,...
         'Position', [editX 0.7 editWidth editHeight] );
     
+    %%% Remove Frames
+    handles.label_remove = uicontrol(...
+        'Parent', handles.panel_controls,...
+        'Style', 'text',...
+        'Units', 'normalized',...
+        'HorizontalAlignment', 'right',...
+        'Position', [ labelX ( 0.4 - 0.5 * editHeight ) labelWidth 1.5*editHeight ],...
+        'String', 'Remove frames (range)' );
+
+    
+    handles.edit_removeRange = uicontrol(...
+        'Parent', handles.panel_controls,...
+        'Style','edit',...
+        'Units', 'normalized',...
+        'BackgroundColor', 'white',...
+        'Tag', 'edit_removeRange',...
+        'String', '',...
+        'Callback', @removeRange_callback,...
+        'Position', [editX 0.4 editWidth editHeight] );
+    
+    handles.button_next = uicontrol(...
+        'Parent',handles.panel_controls,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[(1-labelWidth)/2 0.2 labelWidth 1.3*editHeight],...
+        'Callback', @removeButton_callback,...
+        'String','Remove Frames' );
+    
+    %%% END Crop
     %%% END Control Panel
     
     %%% Main Axes
