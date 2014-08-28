@@ -35,6 +35,9 @@ function exportWindow( mpbus, domain, windowPeriod, showGUI, defaultColormap )
     if showGUI
         guidata(handles.main, handles);
         
+        % update the saveRange edit box
+        saveRange_callback(handles.edit_saveRange, []);
+        
         % set the default colormap
         selectColormap(handles.main, [], handles.colormap);  
     end
@@ -52,12 +55,12 @@ function handles = readFrames(handlesIn)
     
     
     % TESTING -- just loading 100 frames for now
-     nFrames = 100;
+     %nFrames = 100;
     % END TESTING
     
     % initialize a waitbar
     waitbarHandle = waitbar(0, 'Time Remaining: ',...
-                            'Name', 'Exporting...',...
+                            'Name', 'Extracting...',...
                             'WindowStyle', 'modal' );
     
     %exportFile = matfile(EXPORT_FILE_NAME, 'Writable', true);
@@ -126,9 +129,27 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
         eof = false;
     end
     
+    set(handles.main, 'CurrentAxes', handles.axes_main);
     imagesc(handles.imageData(:,:,frameNumber));
     axis off
     colormap(handles.colormap); 
+    
+    % also draw any diameter calculation results
+    if isfield(handles, 'diameter')
+        set(handles.main, 'CurrentAxes', handles.axes_results);
+        cla
+        plot(handles.diameter(frameNumber).image);
+        hold on
+        
+        % draw the FWHM line as well
+        X = [ handles.diameter(frameNumber).leftWidthPoint, ...
+            handles.diameter(frameNumber).rightWidthPoint ];
+        
+        y = handles.diameter(frameNumber).centerPoint(2);
+        
+        line(X, [y,y]);
+        
+    end
     
     set(handles.edit_frameNumber, 'String', frameNumber);
 end
@@ -222,8 +243,54 @@ end
 function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
     addpath('Calculate');
-    % testing -- calculate just the current frame for now
-    vesselDiameter(handles.imageData(:,:,handles.frameNumber));
+    
+    SMOOTHING = 1;
+    FWHM_TO_DIAMETER = 1 / 0.866;
+    
+    handles.diameter = struct(...
+        'image', [],...
+        'leftWidthPoint', 0,...
+        'rightWidthPoint', 0,...
+        'centerPoint', 0,...
+        'fwhm', 0 );
+    
+    diameterVector = zeros(handles.nFrames, 1);
+    
+    for frameIndex = 1 : handles.nFrames
+        dataVector = mean(handles.imageData(:,:,frameIndex));
+
+        [fwhm, leftWidthPoint, rightWidthPoint] = ...
+                                        calcFWHM(dataVector, SMOOTHING);
+        
+        
+        widthDifference = (FWHM_TO_DIAMETER - 1) * fwhm;
+        diameterVector(frameIndex) = FWHM_TO_DIAMETER * fwhm; 
+        
+        centerY = (max(dataVector) + min(dataVector)) / 2;
+        
+        handles.diameter(frameIndex).image = dataVector;
+        handles.diameter(frameIndex).fwhm = fwhm;
+        
+        handles.diameter(frameIndex).leftWidthPoint = ...
+            floor(leftWidthPoint - widthDifference / 2 );
+        
+        handles.diameter(frameIndex).rightWidthPoint = ...
+            floor(rightWidthPoint + widthDifference / 2 );
+        
+        handles.diameter(frameIndex).centerPoint = ...
+            [ (leftWidthPoint + rightWidthPoint)/2, centerY ];
+        
+    end
+    
+    % make the results axes visible
+    set(handles.axes_results, 'Visible', 'on');
+    
+    drawFrame(handles);
+    
+    % open a new window with the total diameter data
+    figure, plot(diameterVector);
+    
+    guidata(handles.main, handles);
 end
 
 function calculateIntensity(hObject, ~)
@@ -309,7 +376,7 @@ function selectColormap(hObject, ~, colormap)
     drawFrame(handles);
 end
 
-function removeRange_callback(hObject, ~)
+function saveRange_callback(hObject, ~)
     % check to see that what the user entered into the 'remove frames' edit
     % box is a valid range
     handles = guidata(hObject);
@@ -319,72 +386,68 @@ function removeRange_callback(hObject, ~)
     
     if length(subStringList) == 2
 
-        handles.cutStart = floor(str2double(subStringList{1}));
+        handles.saveStart = floor(str2double(subStringList{1}));
         
         if strcmp(subStringList{2}, 'end')
-            handles.cutEnd = handles.nFrames;
+            handles.saveEnd = handles.nFrames;
         else
-            handles.cutEnd = floor(str2double(subStringList{2}));
+            handles.saveEnd = floor(str2double(subStringList{2}));
         end
 
-        if isnan(handles.cutStart) || isnan(handles.cutEnd)
+        if isnan(handles.saveStart) || isnan(handles.saveEnd)
             % an invalid range was specified
-            handles.cutStart = 0;
-            handles.cutEnd = 0;
-
-            displayString = '';
+            handles.saveStart = 1;
+            handles.saveEnd = handles.nFrames;
         else
-            % cutStart and cutEnd are now numerical. Make sure they are within
+            % saveStart and saveEnd are now numerical. Make sure they are within
             % the maximum possible range
-            if handles.cutStart < 1
-                handles.cutStart = 1;
+            if handles.saveStart < 1
+                handles.saveStart = 1;
             end
 
-            if handles.cutEnd > handles.nFrames
-                handles.cutEnd = handles.nFrames;
+            if handles.saveEnd > handles.nFrames
+                handles.saveEnd = handles.nFrames;
             end
 
-            if handles.cutStart > handles.cutEnd
-                newCutEnd = handles.cutStart;
-                handles.cutStart = handles.cutEnd;
-                handles.cutEnd = newCutEnd;
+            if handles.saveStart > handles.saveEnd
+                swap = handles.saveStart;
+                handles.saveStart = handles.saveEnd;
+                handles.saveEnd = swap;
             end
-            
-            displayString = sprintf('%d:%d', handles.cutStart, handles.cutEnd);
         end
 
         
     elseif length(subStringList) == 1
-        % just cut 1 frame (no range)
-        handles.cutStart = floor(str2double(subStringList{1}));
+        % just save 1 frame (no range)
+        handles.saveStart = floor(str2double(subStringList{1}));
         
-        if isnan(handles.cutStart)
-            handles.cutStart = 1;
+        if isnan(handles.saveStart)
+            handles.saveStart = 1;
         end
         
-        if handles.cutStart < 1
-            handles.cutStart = 1;
+        if handles.saveStart < 1
+            handles.saveStart = 1;
         end
         
-        if handles.cutStart > handles.nFrames
-            handles.cutStart = handles.nFrames;
+        if handles.saveStart > handles.nFrames
+            handles.saveStart = handles.nFrames;
         end
         
-        handles.cutEnd = handles.cutStart;
+        handles.saveEnd = handles.saveStart;
         
-        displayString = sprintf('%d:%d', handles.cutStart, handles.cutEnd);
     else
-        displayString = '';
+        handles.saveStart = 1;
+        handles.saveEnd = handles.nFrames;
     end
     
-    set(hObject, 'String', displayString);
+    set(hObject, 'String', sprintf('%d:%d', handles.saveStart, handles.saveEnd));
     guidata(handles.main, handles);
 end
 
-function removeButton_callback(hObject, ~)
+function saveButton_callback(hObject, ~)
     handles = guidata(hObject);
     
-    % TODO remove the frames
+    % TODO save the frames
 end
 %%% END CALLBACKS
 
@@ -397,9 +460,9 @@ function handles = createFigure(handlesIn, figureWidth, figureHeight)
         'Colormap',[0 0 0.5625;0 0 0.625;0 0 0.6875;0 0 0.75;0 0 0.8125;0 0 0.875;0 0 0.9375;0 0 1;0 0.0625 1;0 0.125 1;0 0.1875 1;0 0.25 1;0 0.3125 1;0 0.375 1;0 0.4375 1;0 0.5 1;0 0.5625 1;0 0.625 1;0 0.6875 1;0 0.75 1;0 0.8125 1;0 0.875 1;0 0.9375 1;0 1 1;0.0625 1 1;0.125 1 0.9375;0.1875 1 0.875;0.25 1 0.8125;0.3125 1 0.75;0.375 1 0.6875;0.4375 1 0.625;0.5 1 0.5625;0.5625 1 0.5;0.625 1 0.4375;0.6875 1 0.375;0.75 1 0.3125;0.8125 1 0.25;0.875 1 0.1875;0.9375 1 0.125;1 1 0.0625;1 1 0;1 0.9375 0;1 0.875 0;1 0.8125 0;1 0.75 0;1 0.6875 0;1 0.625 0;1 0.5625 0;1 0.5 0;1 0.4375 0;1 0.375 0;1 0.3125 0;1 0.25 0;1 0.1875 0;1 0.125 0;1 0.0625 0;1 0 0;0.9375 0 0;0.875 0 0;0.8125 0 0;0.75 0 0;0.6875 0 0;0.625 0 0;0.5625 0 0],...
         'IntegerHandle','off',...
         'MenuBar','none',...
-        'Name','Path Analyze -- Export',...
+        'Name','Path Analyze -- Extract',...
         'NumberTitle','off',...
-        'Position',[300 300 figureWidth figureHeight],...
+        'Position',[300 400 figureWidth figureHeight],...
         'Tag','main',...
         'Visible','on',...
         'ResizeFcn', @resize_callback);
@@ -562,6 +625,7 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     labelWidth = 2 * editWidth;
     labelX = 0;
     editX = labelX + labelWidth + 2 * PIXEL_PADDING / figureWidth;
+    yLocations = 1 - (1:8) * editHeight;
     
     handles.panel_controls = uipanel(...
     'Parent',handles.main,...
@@ -575,7 +639,7 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
         'Style', 'text',...
         'Units', 'normalized',...
         'HorizontalAlignment', 'right',...
-        'Position', [ labelX 0.9 labelWidth editHeight ],...
+        'Position', [ labelX yLocations(1) labelWidth editHeight ],...
         'String', 'Frame' );
 
     handles.edit_frameNumber = uicontrol(...
@@ -583,14 +647,14 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
         'Style','edit',...
         'Units', 'normalized',...
         'Enable', 'inactive',...
-        'Position', [editX 0.9 editWidth editHeight] );
+        'Position', [editX yLocations(1) editWidth editHeight] );
     
     handles.label_fps = uicontrol(...
         'Parent', handles.panel_controls,...
         'Style', 'text',...
         'Units', 'normalized',...
         'HorizontalAlignment', 'right',...
-        'Position', [ labelX 0.7 labelWidth editHeight ],...
+        'Position', [ labelX yLocations(3) labelWidth editHeight ],...
         'String', 'Frames Per Second' );
 
     handles.edit_fps = uicontrol(...
@@ -600,35 +664,36 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
         'BackgroundColor', 'white',...
         'Tag', 'edit_fps',...
         'String', handles.DEFAULT_FPS,...
-        'Position', [editX 0.7 editWidth editHeight] );
+        'Position', [editX yLocations(3) editWidth editHeight] );
     
     %%% Remove Frames
-    handles.label_remove = uicontrol(...
+    handles.label_save = uicontrol(...
         'Parent', handles.panel_controls,...
         'Style', 'text',...
         'Units', 'normalized',...
         'HorizontalAlignment', 'right',...
-        'Position', [ labelX ( 0.4 - 0.5 * editHeight ) labelWidth 1.5*editHeight ],...
-        'String', 'Remove frames (range)' );
+        'Position', [ labelX yLocations(5) labelWidth 1.5*editHeight ],...
+        'String', 'Save frames (range)' );
 
     
-    handles.edit_removeRange = uicontrol(...
+    handles.edit_saveRange = uicontrol(...
         'Parent', handles.panel_controls,...
         'Style','edit',...
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
-        'Tag', 'edit_removeRange',...
+        'Tag', 'edit_saveRange',...
         'String', '',...
-        'Callback', @removeRange_callback,...
-        'Position', [editX 0.4 editWidth editHeight] );
+        'Callback', @saveRange_callback,...
+        'Position', [editX yLocations(5) editWidth editHeight] );
     
-    handles.button_next = uicontrol(...
+    saveButtonX = editX - labelWidth / 2;
+    handles.button_save = uicontrol(...
         'Parent',handles.panel_controls,...
         'Style','pushbutton',...
         'Units','normalized',...
-        'Position',[(1-labelWidth)/2 0.2 labelWidth 1.3*editHeight],...
-        'Callback', @removeButton_callback,...
-        'String','Remove Frames' );
+        'Position',[saveButtonX yLocations(7) labelWidth 1.3*editHeight],...
+        'Callback', @saveButton_callback,...
+        'String','Save Frames' );
     
     %%% END Crop
     %%% END Control Panel
@@ -640,6 +705,7 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     controlPanelBounds = getpixelposition(handles.panel_controls);
     panelPixelWidth = controlPanelBounds(3);
     panelPixelHeight = controlPanelBounds(4);
+    panelPixelX = controlPanelBounds(1);
     panelPixelY = controlPanelBounds(2);
     
     heightScale = panelPixelHeight / handles.imageHeight;
@@ -652,7 +718,7 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     
     axesHeight = handles.imageHeight * magnification;
     axesWidth = handles.imageWidth * magnification;
-    axesX = figureWidth / 1.8;
+    axesX = panelPixelX + panelPixelWidth;
     axesY = panelPixelY;
    
     axesNormCenterX = ( axesX + 0.5 * axesWidth ) / figureWidth;
@@ -664,7 +730,19 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
         'XTick', [],...
         'YTick', [],...
         'Tag','axes_main' );
+    
+    % also create an axes for calculation results
+    handles.axes_results = axes(...
+        'Parent',handles.main,...
+        'Units','pixels',...
+        'Position',[(axesX + axesWidth + 30) axesY axesWidth axesHeight],...
+        'XTick', [],...
+        'YTick', [],...
+        'Tag','axes_results',...
+        'Visible', 'off');
+    
     %%% END Main Axes
+   
     
     %%% Movie Buttons
     

@@ -15,18 +15,12 @@ function width = vesselDiameter( imageFrame )
     frameWidth = size(imageFrame, 2);
     frameHeight = size(imageFrame, 1);
    
-
+    SMOOTHING = 1;
     dataVector = mean(imageFrame);
     
-    fwhm = calcFWHM(dataVector, []);
-end
-
-
-function fwhm = calcFWHM(dataVector, fittingFunction)
-    
+    [fwhm, leftBoundary, rightBoundary] = calcFWHM(dataVector, SMOOTHING);
     
     
 end
-
 
 

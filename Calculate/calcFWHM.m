@@ -1,4 +1,4 @@
-function [width, point1, point2] = calcFWHM(data,smoothing,threshold)
+function [width, point1, point2] = calcFWHM(data,smoothing)
 % function which takes data and calculates the full-width, half max value
 % half-max values are found looking in from the sides, i.e., the program will work
 % even if the data dips to a lower value in the middle
@@ -27,15 +27,11 @@ end
 baseline_to_sub=min(data(smoothing:(length(data)-smoothing)));
 data =data-baseline_to_sub; % The minimum is calculated on the second to the avant dernier point
 %assignin ('base','test_data',data); % CM_added 20121126 for test
-%% GIVE THE PROPER THRESHOLD RATIO
-if nargin < 3
-    threshold_ratio=3;% changed from 2 to 4 BY Celine Mateo 20120308 for display of a weird vessel
 
-    % [resmoothed_data,new_threshold] = CM_resmooth_line_profile (extra_smoothing,data,threshold_ratio)
-threshold = max(data)/threshold_ratio; % changed from 2 to 4 BY
-    assignin ('base',['ratio_calc_FWHM'],threshold_ratio)
-end
 %%
+% calculating the full width at HALF MAXIMUM
+threshold = max(data)/2;
+
 aboveI = find(data > threshold);    % all the indices where the data is above half max
 
 if isempty(aboveI)
