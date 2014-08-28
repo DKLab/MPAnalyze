@@ -8,7 +8,7 @@
     if exist(fullFileName,'file') == 2
         % exist returns 2 for files (as opposed to 7 for folders)
         [~,~,ext] = fileparts(fullFileName);
-        if ~strcmp(ext, extension)    
+        if ~strcmpi(ext, extension)    
             verified = false;
         else
             verified = true;

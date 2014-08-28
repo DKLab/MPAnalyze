@@ -11,6 +11,8 @@ handles = createGUI();
 handles.SLIDER_WIDTH = 20;
 
 handles.MINIMUM_WINDOW_PERIOD = 15;
+handles.isLoaded = false;
+
 % Data window specs (values are modified by the user through the GUI)
 handles.showWindow = false;
 handles.windowPeriod = 100;       % the height (in time) of a data window
@@ -130,34 +132,36 @@ function handles = drawLineView(handlesIn, startingLine)
         lastStartingLine = startingLine;
     end
     
-    axesPosition = getpixelposition(handles.axes_lineScan);
-    finishLine = startingLine + axesPosition(4);
-    visibleRange = startingLine : finishLine;
-    domain = [1, floor(axesPosition(3))];
-    
-    lineData = handles.mpbus.readLines(visibleRange);
-    
-    set(handles.main,'CurrentAxes',handles.axes_lineScan);    
-    cla
-    imagesc(lineData, 'ButtonDownFcn', @mouseClick_line);
-    axis off
-    colormap(handles.colormap);
-    
-    % now draw lines to show where the data windows are
-    % for now, just drawing horizontal lines
-    [~, visibleLocations] = ismember(handles.windowHorizontalLocations, visibleRange);
-    visibleLocations(visibleLocations==0) = [];     % remove unmatched elements
-    handles.windowHorizontalPixelLocations = visibleLocations;
-    
-    for location = visibleLocations
-        line(domain, [location location], ...
-            'color','red',...
-            'Tag','scanWindow',...
-            'LineStyle',':',...
-            'ButtonDownFcn',@mouseClick_line);
+    if handles.isLoaded
+        axesPosition = getpixelposition(handles.axes_lineScan);
+        finishLine = startingLine + axesPosition(4);
+        visibleRange = startingLine : finishLine;
+        domain = [1, floor(axesPosition(3))];
+
+        lineData = handles.mpbus.readLines(visibleRange);
+
+        set(handles.main,'CurrentAxes',handles.axes_lineScan);    
+        cla
+        imagesc(lineData, 'ButtonDownFcn', @mouseClick_line);
+        axis off
+        colormap(handles.colormap);
+
+        % now draw lines to show where the data windows are
+        % for now, just drawing horizontal lines
+        [~, visibleLocations] = ismember(handles.windowHorizontalLocations, visibleRange);
+        visibleLocations(visibleLocations==0) = [];     % remove unmatched elements
+        handles.windowHorizontalPixelLocations = visibleLocations;
+
+        for location = visibleLocations
+            line(domain, [location location], ...
+                'color','red',...
+                'Tag','scanWindow',...
+                'LineStyle',':',...
+                'ButtonDownFcn',@mouseClick_line);
+        end
+
+        drawRegionInLineView(handles);
     end
-    
-    drawRegionInLineView(handles);
 end
 
 function drawRegionInLineView(handles)
@@ -772,12 +776,17 @@ function slider_sideView_Callback(hObject, ~)
     disp(selectedLine);
 end
 
-function loadFile(hObject, ~)
+function loadFile(hObject, ~, optional_filename)
     handles = guidata(hObject);
     
-    [fileName, filePath] = uigetfile('*.h5','open file - HDF5 (*.h5)'); % open file
+    if exist('optional_filename', 'var')
+        fullFileName = optional_filename;
+    else
+        [fileName, filePath] = uigetfile('*.h5','open file - HDF5 (*.h5)'); % open file
 
-    fullFileName = [filePath fileName];
+        fullFileName = [filePath fileName];
+    end
+    
     if ~MPBus.verifyFile(fullFileName, '.h5')
         return;
     end
@@ -800,6 +809,7 @@ function loadFile(hObject, ~)
     % TODO: populate the path listbox
     
    
+    handles.isLoaded = true;
     
     handles.nPoints = handles.mpbus.xsize ...
                       * handles.mpbus.ysize ...
@@ -846,6 +856,24 @@ function loadFile(hObject, ~)
     guidata(hObject, handles); % Update handles structure
     
     drawScanRegion(handles.main, []);
+end
+
+function convertFile(hObject, ~)
+    handles = guidata(hObject);
+    
+    [fileName, filePath] = uigetfile('*.mpd','open file - MPD (*.mpd)'); % open file
+
+    fullFileName = [filePath fileName];
+    if MPBus.verifyFile(fullFileName, '.mpd')
+        [ h5Filename, success ] = convert(fullFileName);
+        
+        
+        if success
+            loadFile(hObject, [], h5Filename);
+        end
+    end
+    
+    
 end
 
 function drawScanRegion(hObject, ~)
@@ -914,10 +942,6 @@ function drawScanRegion(hObject, ~)
         %placePoint = sc.startPoint + .1*(sc.endPoint-sc.startPoint);
         %text(placePoint(1)-.1,placePoint(2)+.05,sc.name,'color','red','FontSize',12)
 
-        % attach a context menu to the axes
-        menuHandle = uicontextmenu;
-        uimenu(menuHandle,'Label','Hide','Callback',@axesmenu_hide);
-        set(handles.axes_topView, 'uicontextmenu', menuHandle);
         
         % draw the scan regions on the Line Scan axes
         drawRegionInLineView(handles);
@@ -1041,6 +1065,8 @@ function mouseWheelScroll(hObject, eventdata)
     
     slider_lineScan_Callback(handles.slider_lineScan, []);
 end
+
+
 %%% END CALLBACKS
 
 
@@ -1253,6 +1279,12 @@ handles.menu_open = uimenu(...
     'Callback',@loadFile,...
     'Label','Open...',...
     'Tag','menu_open' );
+
+handles.menu_convert = uimenu(...
+    'Parent',handles.menu_file,...
+    'Callback',@convertFile,...
+    'Label','Convert MPD to HDF5...',...
+    'Tag','menu_convert' );
 
 handles.menu_image = uimenu(...
     'Parent',handles.main,...

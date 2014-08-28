@@ -242,7 +242,7 @@ end
 
 function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
-    addpath('Calculate');
+    
     
     SMOOTHING = 1;
     FWHM_TO_DIAMETER = 1 / 0.866;
@@ -260,7 +260,7 @@ function calculateDiameter(hObject, ~)
         dataVector = mean(handles.imageData(:,:,frameIndex));
 
         [fwhm, leftWidthPoint, rightWidthPoint] = ...
-                                        calcFWHM(dataVector, SMOOTHING);
+                                        calcFWHM(dataVector, SMOOTHING, true);
         
         
         widthDifference = (FWHM_TO_DIAMETER - 1) * fwhm;
