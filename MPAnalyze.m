@@ -57,7 +57,7 @@ function MPAnalyze_OpeningFcn(hObject, eventdata, handles, varargin)
 handles.output = hObject;
 resetPWD;
 %%%%%%%%%%%%%%%%%%
-handles.mpbus = MPBus(hObject);
+handles.mpbus = MPBus(hObject, false);
 handles.INSTALL_STRING = '<HTML><i>Install Module...</i></HTML>';
 refreshModules(hObject, handles);
 %%%%%%%%%%%%%%%%%%

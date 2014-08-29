@@ -3,8 +3,15 @@ function status = output( this, variableName, variableValue )
 %   A GUI module can use this function to send variables to the MPBus's
 %   buffer.
 
-    % pushBuffer already accomplishes this task. 'output' is just an easier
-    % name to use/remember.
-    this.pushBuffer(variableName, variableValue);
+    % uses pushBuffer to prepare the variable to get put on the
+    % MPWorkspace.
+    % Or, if there isn't an MPWorkspace just push the variable to the base
+    % workspace
+    if this.workspaceIsBase
+        assignin('base', variableName, variableValue);
+        status = true;
+    else
+        status = this.pushBuffer(variableName, variableValue);
+    end
 end
 

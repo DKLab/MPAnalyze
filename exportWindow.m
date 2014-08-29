@@ -55,7 +55,7 @@ function handles = readFrames(handlesIn)
     
     
     % TESTING -- just loading 100 frames for now
-     %nFrames = 100;
+    %nFrames = 200;
     % END TESTING
     
     % initialize a waitbar
@@ -136,18 +136,33 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     
     % also draw any diameter calculation results
     if isfield(handles, 'diameter')
+        diameterStruct = handles.diameter(frameNumber);
+        
         set(handles.main, 'CurrentAxes', handles.axes_results);
         cla
-        plot(handles.diameter(frameNumber).image);
+        plot(diameterStruct.image);
         hold on
         
         % draw the FWHM line as well
-        X = [ handles.diameter(frameNumber).leftWidthPoint, ...
-            handles.diameter(frameNumber).rightWidthPoint ];
+        X = [ diameterStruct.leftWidthPoint, ...
+            diameterStruct.rightWidthPoint ];
         
-        y = handles.diameter(frameNumber).centerPoint(2);
+        y = diameterStruct.centerPoint(2);
         
         line(X, [y,y]);
+        
+        % and the Gaussian fit
+        coefficients = diameterStruct.coefficients;
+        if ~isempty(coefficients)
+            a = coefficients(1);
+            b = coefficients(2);
+            c = coefficients(3);
+
+            gaussX = 1 : length(diameterStruct.image);
+            gaussY = a * exp( -1/2 .* ( (gaussX - b) ./ c ).^2 );
+
+            plot(gaussX, gaussY, 'r');
+        end
         
     end
     
@@ -243,34 +258,64 @@ end
 function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
     
-    
     SMOOTHING = 1;
-    FWHM_TO_DIAMETER = 1 / 0.866;
+    FWHM_TO_DIAMETER_GAUSSIAN = 1 / 0.707;
+    FWHM_TO_DIAMETER_IMAGE = 1 / 0.866;
+    
+    % the user can choose to do a fast calculation (width is based on
+    % threshold values) or a slow calculation (data is fit to a gaussian
+    % and the width is determined from the resulting fitting parameters)
+    title = 'Calculate Diameter';
+    line1 = 'Do you want to calculate the diameter by counting pixels (fast)?';
+    line2 = 'Or by fitting to a Gaussian (slow)?';
+    qstring = sprintf('%s\n%s', line1, line2);
+    fast = 'Count Pixels (fast)';
+    slow = 'Gaussian (slow)';
+    answer = questdlg(qstring, title, fast, slow, fast); 
+    
+    if strcmp(answer, slow);
+        fitToGaussianFlag = true;
+        fwhmConversion = FWHM_TO_DIAMETER_GAUSSIAN;
+    else
+        fitToGaussianFlag = false;
+        fwhmConversion = FWHM_TO_DIAMETER_IMAGE;
+    end
     
     handles.diameter = struct(...
         'image', [],...
         'leftWidthPoint', 0,...
         'rightWidthPoint', 0,...
         'centerPoint', 0,...
-        'fwhm', 0 );
+        'fwhm', 0,...
+        'coefficients', 0 );
     
     diameterVector = zeros(handles.nFrames, 1);
     
+    % initialize a waitbar
+    waitbarHandle = waitbar(0, 'Time Remaining: ',...
+                            'Name', 'Calculating Diameter...',...
+                            'WindowStyle', 'modal' );
+    startTime = clock;                   
+    
     for frameIndex = 1 : handles.nFrames
         dataVector = mean(handles.imageData(:,:,frameIndex));
+        
+        % subtract the offset first
+        dataVector = dataVector - min(dataVector);
 
-        [fwhm, leftWidthPoint, rightWidthPoint] = ...
-                                        calcFWHM(dataVector, SMOOTHING, true);
+        [fwhm, leftWidthPoint, rightWidthPoint, coefficients] = ...
+                          calcFWHM(dataVector, SMOOTHING, fitToGaussianFlag);
         
-        
-        widthDifference = (FWHM_TO_DIAMETER - 1) * fwhm;
-        diameterVector(frameIndex) = FWHM_TO_DIAMETER * fwhm; 
+
+        widthDifference = (fwhmConversion - 1) * fwhm;
+        diameterVector(frameIndex) = fwhmConversion * fwhm; 
         
         centerY = (max(dataVector) + min(dataVector)) / 2;
         
         handles.diameter(frameIndex).image = dataVector;
         handles.diameter(frameIndex).fwhm = fwhm;
-        
+        handles.diameter(frameIndex).coefficients = coefficients;
+
         handles.diameter(frameIndex).leftWidthPoint = ...
             floor(leftWidthPoint - widthDifference / 2 );
         
@@ -278,9 +323,29 @@ function calculateDiameter(hObject, ~)
             floor(rightWidthPoint + widthDifference / 2 );
         
         handles.diameter(frameIndex).centerPoint = ...
-            [ (leftWidthPoint + rightWidthPoint)/2, centerY ];
+            [ (leftWidthPoint + rightWidthPoint)/2, centerY ]; 
         
+         % also, calculate how much time is remaining
+        currentTime = clock;
+        elapsedTime = etime(currentTime, startTime);
+        secondsPerFrame = elapsedTime / frameIndex;
+        secondsRemaining = floor(( handles.nFrames - frameIndex ) * secondsPerFrame);
+        waitbarMessage = sprintf('About %d seconds remaining.', secondsRemaining);
+        
+        waitbar(frameIndex/handles.nFrames, waitbarHandle, waitbarMessage);
     end
+    
+    close(waitbarHandle);
+    set(handles.main, 'CurrentAxes', handles.axes_main);
+    
+    % output the total calculated diameter (diameterVector)
+    if fitToGaussianFlag
+        calcType = 'gaussian';
+    else
+        calcType = 'fast';
+    end
+    varName = sprintf('diameter_%s', calcType);
+    handles.mpbus.output(varName, diameterVector);
     
     % make the results axes visible
     set(handles.axes_results, 'Visible', 'on');

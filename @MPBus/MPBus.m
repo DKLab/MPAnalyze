@@ -40,6 +40,8 @@ classdef MPBus < handle
                         % MPBus can run. A module can be a function or a GUI.
         
         workspace;      % the MPWorkspace object attached to this MPBus
+        workspaceIsBase;    % should the workspace be exported to the base workspace
+                            % when new variables are added?
         
         root;           % the folder path of the function that created this
                         % MPBus object.
@@ -92,7 +94,7 @@ classdef MPBus < handle
         
         %------------------------------------------------------------------
         % constructor
-        function this = MPBus(GUI_Handle, verbose)
+        function this = MPBus(GUI_Handle, useBaseWorkspace)
             % the GUI that created this MPBus object is in the root
             % directory. Use this opertunity to determine the root
             % directory and make the information globally available.
@@ -109,18 +111,17 @@ classdef MPBus < handle
                 % at this point I'm not sure if anything should
                 % be done about that
                 GUI_Handle = [];
-                verbose = false;
+                useBaseWorkspace = true;
             end
             
             this.workspace = MPWorkspace();
             this.guiHandle = GUI_Handle;
             
-            if exist('verbose', 'var')
-                this.verbose = verbose;
-            else
-                % default value (verbose off)
-                this.verbose = false;
+            if ~exist('useBaseWorkspace', 'var')
+                useBaseWorkspace = true;
             end
+            
+            this.workspaceIsBase = useBaseWorkspace;
             
             % build a list of modules that can be run
             this.populateModuleList();

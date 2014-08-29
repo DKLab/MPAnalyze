@@ -12,6 +12,7 @@ handles.SLIDER_WIDTH = 20;
 
 handles.MINIMUM_WINDOW_PERIOD = 15;
 handles.isLoaded = false;
+handles.imageStack = [];
 
 % Data window specs (values are modified by the user through the GUI)
 handles.showWindow = false;
@@ -29,7 +30,9 @@ handles.region = struct(...
     'leftBoundary',0,...
     'rightBoundary',0,...
     'lineHandle',[],...
-    'lineStyle',':');
+    'lineStyle',':',...
+    'leftScanCoord',0,...
+    'rightScanCoord',0);
 
 handles.activeRegion = [];  % will contain a single region struct from
                             % the stuct array handles.region
@@ -55,7 +58,7 @@ if nargin > 0
    else
        % there was a varargin but it wasn't a MPBus
        disp('Creating a new MPBus');
-       handles.mpbus = MPBus(handles.main);
+       handles.mpbus = MPBus(handles.main, true);
    end
 else
     % there was no varargin
@@ -113,8 +116,57 @@ end
 
 function drawSideView(handles, z)
     if ~exist('z', 'var')
-        z = 0;
+        z = 1;
     end
+    
+    if ~isempty(handles.imageStack)
+        if isempty(handles.activeRegion)
+            sideImage = handles.imageStack(:,:,z);
+        else
+            % draw the side view near the active region
+            xlim = get(handles.axes_topView, 'XLim');
+            ylim = get(handles.axes_topView, 'YLim');
+            axesPixels = getpixelposition(handles.axes_topView);
+            
+            xTransform = xlim(2) * axesPixels(3);
+            yTransform = ylim(2) * axesPixels(4);
+            xOffset = xlim(2)/2;
+            yOffset = ylim(2)/2;
+            
+            startPoint = handles.activeRegion.leftScanCoord;
+            endPoint = handles.activeRegion.rightScanCoord;
+            
+            Y = [startPoint(2), endPoint(2)] + yOffset;
+            X = [startPoint(1), endPoint(1)] + xOffset;
+            Y = sort( round( Y .* yTransform ) );
+            X = sort( round( X .* xTransform ) );
+            
+            displacementX = abs(endPoint(1) - startPoint(1));
+            displacementY = abs(endPoint(2) - startPoint(2));
+            
+            if displacementY > displacementX
+                %TODO: this shouldnt be a projection, instead just get the
+                % pixels undeneath the path
+                
+                % project the x axis
+                imageChunk = handles.imageStack(:, Y(1):Y(2), :);
+                reducedChunk = max(imageChunk, [], 1);
+                sideImage(:,:) = reducedChunk(1, :, :);
+            else
+                % project the y axis
+                imageChunk = handles.imageStack(X(1):X(2), Y(1) : Y(2), :);
+                reducedChunk = max(imageChunk, [], 2);
+                sideImage(:,:) = reducedChunk(:, 1, :);
+            end
+        end
+        
+        set(handles.main, 'CurrentAxes', handles.axes_sideView);
+            cla
+            imagesc( sideImage );
+            axis off
+    end
+    
+    
 end
 
 function handles = drawLineView(handlesIn, startingLine)
@@ -404,6 +456,8 @@ function handles = createRegions(handlesIn)
                     % the regionIndex (this was the regionIndex before the
                     % boundary was encountered)
                     handles.region(regionIndex).rightBoundary = pixelIndex;
+                    handles.region(regionIndex).rightScanCoord = ...
+                        [scanCoords.startPoint(1), scanCoords.startPoint(2)];
                     
                     % update the active region as well
                     if regionIndex == handles.activeRegionIndex
@@ -415,6 +469,12 @@ function handles = createRegions(handlesIn)
                 else
                     % the region has begun, update the region index first
                     regionIndex = regionPath(pixelIndex);
+                    
+                    % then get new scanCoords for this region
+                    scanCoords = scanData.scanCoords(regionIndex);
+                    handles.region(regionIndex).leftScanCoord = ...
+                        [scanCoords.endPoint(1), scanCoords.endPoint(2)];
+                    
                     handles.region(regionIndex).leftBoundary = pixelIndex;
                     
                     % update the active region as well
@@ -472,6 +532,7 @@ function activateRegion(handles, regionIndex)
     guidata(handles.main, handles);
     displayWidthChange(handles);
     displayHeightChange(handles);
+    drawSideView(handles);
 end
 
 function displayHeightChange(handles)
@@ -776,7 +837,7 @@ function slider_sideView_Callback(hObject, ~)
     disp(selectedLine);
 end
 
-function loadFile(hObject, ~, optional_filename)
+function loadScanFile(hObject, ~, optional_filename)
     handles = guidata(hObject);
     
     if exist('optional_filename', 'var')
@@ -856,6 +917,50 @@ function loadFile(hObject, ~, optional_filename)
     guidata(hObject, handles); % Update handles structure
     
     drawScanRegion(handles.main, []);
+end
+
+function loadStackFile(hObject, ~, optional_filename)
+     
+    handles = guidata(hObject);
+    
+    if exist('optional_filename', 'var')
+        fullFileName = optional_filename;
+    else
+        [fileName, filePath] = uigetfile('*.h5','open file - HDF5 (*.h5)'); % open file
+
+        fullFileName = [filePath fileName];
+    end
+    
+    if ~MPBus.verifyFile(fullFileName, '.h5')
+        return;
+    end
+
+
+    % just pull the image stack from this file
+    info = h5info(fullFileName);
+    for groupIndex = 1 : length(info.Groups)
+        groupName = info.Groups(groupIndex).Name;
+        
+        foundIndex = strfind(groupName, 'ImageCh');
+        
+        if ~isempty(foundIndex)
+            imageGroup = groupName;
+        end
+    end
+ 
+    groupInfo = h5info(fullFileName, imageGroup);
+    imageSize = groupInfo.Datasets(1).Dataspace.Size;
+    
+    handles.imageStack = zeros( imageSize(1), imageSize(2), ...
+                            length(groupInfo.Datasets));
+    
+    for datasetIndex = 1 : length(groupInfo.Datasets)   
+        datasetPath = sprintf('%s/%s', imageGroup, groupInfo.Datasets(datasetIndex).Name); 
+        handles.imageStack(:, :, datasetIndex) = ...
+                            transpose( h5read(fullFileName, datasetPath) );    
+    end
+    
+    guidata(handles.main, handles);
 end
 
 function convertFile(hObject, ~)
@@ -946,11 +1051,6 @@ function drawScanRegion(hObject, ~)
         % draw the scan regions on the Line Scan axes
         drawRegionInLineView(handles);
     end
-end
-
-
-function axesmenu_hide(hObject, ~)
-    disp('hiding this line');
 end
 
 function drawScanPath(hObject, ~)
@@ -1051,19 +1151,20 @@ function mouseWheelScroll(hObject, eventdata)
     
     % set the new slider value and run its callback
     handles = guidata(hObject);
-    
-    sliderValue = get(handles.slider_lineScan, 'Value');
-    newValue = sliderValue - SCROLL_FACTOR * eventdata.VerticalScrollCount;
-    
-    minValue = get(handles.slider_lineScan, 'Min');
-    maxValue = get(handles.slider_lineScan, 'Max');
-    
-    newValue = min( [ max([newValue, minValue]), maxValue ] );
-    
-    
-    set(handles.slider_lineScan, 'Value', newValue );
-    
-    slider_lineScan_Callback(handles.slider_lineScan, []);
+    if handles.isLoaded
+        sliderValue = get(handles.slider_lineScan, 'Value');
+        newValue = sliderValue - SCROLL_FACTOR * eventdata.VerticalScrollCount;
+
+        minValue = get(handles.slider_lineScan, 'Min');
+        maxValue = get(handles.slider_lineScan, 'Max');
+
+        newValue = min( [ max([newValue, minValue]), maxValue ] );
+
+
+        set(handles.slider_lineScan, 'Value', newValue );
+
+        slider_lineScan_Callback(handles.slider_lineScan, []);
+    end
 end
 
 
@@ -1276,9 +1377,15 @@ handles.menu_file = uimenu(...
 handles.menu_open = uimenu(...
     'Parent',handles.menu_file,...
     'Accelerator','O',...
-    'Callback',@loadFile,...
-    'Label','Open...',...
+    'Callback',@loadScanFile,...
+    'Label','Open Scan File...',...
     'Tag','menu_open' );
+
+handles.menu_openStack = uimenu(...
+    'Parent',handles.menu_file,...
+    'Callback',@loadStackFile,...
+    'Label','Open Z-Stack File...',...
+    'Tag','menu_openStack' );
 
 handles.menu_convert = uimenu(...
     'Parent',handles.menu_file,...

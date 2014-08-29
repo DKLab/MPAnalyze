@@ -1,4 +1,4 @@
-function [width, point1, point2, fitResult] = calcFWHM(data, smoothing, fitToGaussianFlag)
+function [width, point1, point2, coefficients] = calcFWHM(data, smoothing, fitToGaussianFlag)
 % function which takes data and calculates the full-width, half max value
 % half-max values are found looking in from the sides, i.e., the program will work
 % even if the data dips to a lower value in the middle
@@ -10,23 +10,28 @@ end
 point1 = 0;
 point2 = 0;
 width = 0;
-fitResult = [];
+coefficients = [];
 
 data = double(data);
 
 if fitToGaussianFlag
     % find the FWHM by fitting the data to a Gaussian and calculating the
     % width from the fitting parameters
+    GAUSS_FWHM = 2.3548;    % GAUSS_FWHM is just 2 * sqrt(2 * log(2))    
+    
     X = 1 : length(data);
     Y = data;
     
     fitResult = fit(X', Y', 'gauss1');
-%     figure, plot(fitResult);
-%     hold on
-%     plot(data);
+%      figure, plot(fitResult);
+%      hold on
+%      plot(Y);
     coefficients = coeffvalues(fitResult);
+    width = GAUSS_FWHM * coefficients(3);
+    centerX = coefficients(2);
     
-    width = 2 * sqrt(2 * log(2)) * coefficients(3);
+    point1 = centerX - width/2;
+    point2 = centerX + width/2;
     
 else
     % the remainder of this code is from the old version of calcFWHM.
