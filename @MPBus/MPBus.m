@@ -55,7 +55,7 @@ classdef MPBus < handle
         [variableNameList, status] = variables(this);
         
         % output() sends a variable to the buffer (output from module) 
-        status = output(this, variableName, variableValue);
+        status = output(this, variableName, variableValue, moduleName);
         % input() gets a variable from the workspace (input to module)
         [variableValue, status] = input(this, variableName);
         % gui() creates a gui to gather user input

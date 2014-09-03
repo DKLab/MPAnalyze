@@ -114,14 +114,11 @@ function drawTopView(handles)
     set(imageHandle, 'ButtonDownFcn', @mouseClick_top);
 end
 
-function drawSideView(handles, z)
-    if ~exist('z', 'var')
-        z = 1;
-    end
+function drawSideView(handles)
     
     if ~isempty(handles.imageStack)
         if isempty(handles.activeRegion)
-            sideImage = handles.imageStack(:,:,z);
+            sideImage = handles.imageStack(:,:,1);
         else
             % draw the side view near the active region
             xlim = get(handles.axes_topView, 'XLim');
@@ -136,37 +133,48 @@ function drawSideView(handles, z)
             startPoint = handles.activeRegion.leftScanCoord;
             endPoint = handles.activeRegion.rightScanCoord;
             
-            Y = [startPoint(2), endPoint(2)] + yOffset;
-            X = [startPoint(1), endPoint(1)] + xOffset;
-            Y = sort( round( Y .* yTransform ) );
-            X = sort( round( X .* xTransform ) );
+            startPixel = round( [xTransform * (startPoint(1) + xOffset), ...
+                          yTransform * (startPoint(2) + yOffset)] );
+                      
+            endPixel = round( [xTransform * (endPoint(1) + xOffset), ...
+                          yTransform * (endPoint(2) + yOffset)] );
             
-            displacementX = abs(endPoint(1) - startPoint(1));
-            displacementY = abs(endPoint(2) - startPoint(2));
+
+            [ X, Y ] = getPixelIndicies(startPixel, endPixel);
             
-            if displacementY > displacementX
-                %TODO: this shouldnt be a projection, instead just get the
-                % pixels undeneath the path
-                
-                % project the x axis
-                imageChunk = handles.imageStack(:, Y(1):Y(2), :);
-                reducedChunk = max(imageChunk, [], 1);
-                sideImage(:,:) = reducedChunk(1, :, :);
-            else
-                % project the y axis
-                imageChunk = handles.imageStack(X(1):X(2), Y(1) : Y(2), :);
-                reducedChunk = max(imageChunk, [], 2);
-                sideImage(:,:) = reducedChunk(:, 1, :);
+            % now extract each pixel stack and combine into one image
+            sideImage = zeros(length(X), size(handles.imageStack, 3));
+            
+            for pixelIndex = 1 : length(X)
+                sideImage(pixelIndex, :) = ...
+                    handles.imageStack( X(pixelIndex), Y(pixelIndex), :);
             end
+                  
+            handles.mpbus.output('sideImage', transpose(sideImage), 'Path Analyze');
         end
+  
         
-        set(handles.main, 'CurrentAxes', handles.axes_sideView);
-            cla
-            imagesc( sideImage );
-            axis off
+%         set(handles.main, 'CurrentAxes', handles.axes_sideView);
+%             cla
+%             imagesc( sideImage );
+%             axis off
     end
     
     
+end
+
+function [ X, Y ] = getPixelIndicies(startPixel, endPixel)
+%GETPIXELINDICIES returns an array of indicies corresponding to the pixels
+%along the line from startPixel to endPixel
+
+    % using point slope formla y - y0 = m(x - x0)
+    X = startPixel(1) - 10 : endPixel(1) + 10;
+    m = (endPixel(2) - startPixel(2)) /...
+        (endPixel(1) - startPixel(1));
+    x0 = startPixel(1);
+    y0 = startPixel(2);
+    
+    Y = round( m .* ( X - x0 ) + y0 ); 
 end
 
 function handles = drawLineView(handlesIn, startingLine)
@@ -862,7 +870,7 @@ function loadScanFile(hObject, ~, optional_filename)
     end
     
     % put the scanData on the MPWorkspace
-    handles.mpbus.output('scanData', handles.mpbus.scanData);
+    handles.mpbus.output('scanData', handles.mpbus.scanData, 'Path Analyze');
     
     % set the channel list
     % TODO: need a new way to display channel list
@@ -911,7 +919,7 @@ function loadScanFile(hObject, ~, optional_filename)
     
     % draw image
     drawTopView(handles);
-    drawSideView(handles, 1);
+    drawSideView(handles);
     handles = drawLineView(handles);
     
     guidata(hObject, handles); % Update handles structure
@@ -950,9 +958,10 @@ function loadStackFile(hObject, ~, optional_filename)
  
     groupInfo = h5info(fullFileName, imageGroup);
     imageSize = groupInfo.Datasets(1).Dataspace.Size;
+
     
     handles.imageStack = zeros( imageSize(1), imageSize(2), ...
-                            length(groupInfo.Datasets));
+                            length(groupInfo.Datasets), 'int16');
     
     for datasetIndex = 1 : length(groupInfo.Datasets)   
         datasetPath = sprintf('%s/%s', imageGroup, groupInfo.Datasets(datasetIndex).Name); 
@@ -1141,8 +1150,8 @@ function exportActiveRegion(hObject, ~)
     
     domain = [ handles.activeRegion.leftBoundary,...
                 handles.activeRegion.rightBoundary ];
-    
-    exportWindow(handles.mpbus, domain, handles.windowPeriod,...
+    % calculator() opens the Calculator GUI
+    calculator(handles.mpbus, domain, handles.windowPeriod,...
                                         true, handles.colormap); 
 end
 

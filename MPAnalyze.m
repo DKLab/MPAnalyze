@@ -478,9 +478,10 @@ function popEntireBuffer(hObject, handles)
 % pop all variables off the mpbus buffer and resolve any name conflicts
 
 %TODO: NEW: MPBus will handle this
-%success = handles.mpbus.outputDialog();
+refreshWorkspace(hObject, handles);
 
 %TODO: old code below:
+%{
 variablesRemaining = handles.mpbus.bufferSize();
 
 if variablesRemaining > 0
@@ -514,8 +515,9 @@ if variablesRemaining > 0
 
     guidata(handles.output, handles);
     refreshWorkspace(hObject, handles);
-end
 
+end
+%}
 
 
 
