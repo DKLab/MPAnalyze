@@ -11,6 +11,7 @@ handles = createGUI();
 handles.SLIDER_WIDTH = 20;
 
 handles.MINIMUM_WINDOW_PERIOD = 15;
+handles.IMAGE_SCALE_FACTOR = 1;     % used by calculator
 handles.isLoaded = false;
 handles.imageStack = [];
 
@@ -68,6 +69,7 @@ end
 
 set(handles.main, 'WindowButtonMotionFcn', @mouseMovement);
 set(handles.main, 'WindowButtonUpFcn', @mouseUp);
+set(handles.main, 'ResizeFcn', @resizeFigure);
 
 guidata(handles.main, handles);
 
@@ -93,7 +95,7 @@ function refreshAll(handles)
         handles = createRegions(handles);
         
         drawTopView(handles);
-        drawSideView(handles);
+
         handles = drawLineView(handles);
         guidata(handles.main, handles);
         
@@ -109,58 +111,10 @@ function drawTopView(handles)
     imageHandle = imagesc(scanData.axisLimCol, scanData.axisLimRow, ...
                                                             scanData.im);
     axis off
+    axis image
     colormap(handles.colormap);
     
     set(imageHandle, 'ButtonDownFcn', @mouseClick_top);
-end
-
-function drawSideView(handles)
-    
-    if ~isempty(handles.imageStack)
-        if isempty(handles.activeRegion)
-            sideImage = handles.imageStack(:,:,1);
-        else
-            % draw the side view near the active region
-            xlim = get(handles.axes_topView, 'XLim');
-            ylim = get(handles.axes_topView, 'YLim');
-            axesPixels = getpixelposition(handles.axes_topView);
-            
-            xTransform = xlim(2) * axesPixels(3);
-            yTransform = ylim(2) * axesPixels(4);
-            xOffset = xlim(2)/2;
-            yOffset = ylim(2)/2;
-            
-            startPoint = handles.activeRegion.leftScanCoord;
-            endPoint = handles.activeRegion.rightScanCoord;
-            
-            startPixel = round( [xTransform * (startPoint(1) + xOffset), ...
-                          yTransform * (startPoint(2) + yOffset)] );
-                      
-            endPixel = round( [xTransform * (endPoint(1) + xOffset), ...
-                          yTransform * (endPoint(2) + yOffset)] );
-            
-
-            [ X, Y ] = getPixelIndicies(startPixel, endPixel);
-            
-            % now extract each pixel stack and combine into one image
-            sideImage = zeros(length(X), size(handles.imageStack, 3));
-            
-            for pixelIndex = 1 : length(X)
-                sideImage(pixelIndex, :) = ...
-                    handles.imageStack( X(pixelIndex), Y(pixelIndex), :);
-            end
-                  
-            handles.mpbus.output('sideImage', transpose(sideImage), 'Path Analyze');
-        end
-  
-        
-%         set(handles.main, 'CurrentAxes', handles.axes_sideView);
-%             cla
-%             imagesc( sideImage );
-%             axis off
-    end
-    
-    
 end
 
 function [ X, Y ] = getPixelIndicies(startPixel, endPixel)
@@ -525,22 +479,25 @@ function activateRegion(handles, regionIndex)
     
     
     % save this as the active region
-    controlHandles = findall(handles.panel_controls,...
+    controlHandles = findall(handles.panel_control,...
                                 'Tag', 'activeRegionControl');
+    extractHandles = findall(handles.main, 'Tag', 'extract');
+    allHandles = union(controlHandles, extractHandles);
+    
     if regionIndex > 0
         handles.activeRegion = handles.region(regionIndex);
         handles.activeRegionIndex = regionIndex;
-        set(controlHandles, 'Enable','on');
+        set(allHandles, 'Enable','on');
     else
         handles.activeRegion = [];
         handles.activeRegionIndex = 0;
-        set(controlHandles, 'Enable','off');
+        set(allHandles, 'Enable','off');
     end
      
     guidata(handles.main, handles);
     displayWidthChange(handles);
     displayHeightChange(handles);
-    drawSideView(handles);
+
 end
 
 function displayHeightChange(handles)
@@ -840,11 +797,6 @@ function slider_lineScan_Callback(hObject, ~)
     guidata(handles.main, handles);
 end
 
-function slider_sideView_Callback(hObject, ~)
-    selectedLine = floor(get(hObject, 'Value'));
-    disp(selectedLine);
-end
-
 function loadScanFile(hObject, ~, optional_filename)
     handles = guidata(hObject);
     
@@ -883,6 +835,8 @@ function loadScanFile(hObject, ~, optional_filename)
     handles.nPoints = handles.mpbus.xsize ...
                       * handles.mpbus.ysize ...
                       * handles.mpbus.numFrames;
+    %TODO: try/catch error if the loaded file doesnt actually have this
+    %info
     
     % total number of lines in scanned data              
     handles.nLines = handles.mpbus.ysize ...
@@ -911,7 +865,7 @@ function loadScanFile(hObject, ~, optional_filename)
     
     % setup the sliders
     range = [1, (handles.mpbus.ysize * handles.mpbus.numFrames)];
-    handles = createLineSlider(handles, range, 10, 100);
+    handles = createLineSlider(handles, range);
     
     
     % setup region boundaries
@@ -919,58 +873,15 @@ function loadScanFile(hObject, ~, optional_filename)
     
     % draw image
     drawTopView(handles);
-    drawSideView(handles);
     handles = drawLineView(handles);
     
     guidata(hObject, handles); % Update handles structure
     
     drawScanRegion(handles.main, []);
+    
+    resizeFigure(handles.main, []);
 end
 
-function loadStackFile(hObject, ~, optional_filename)
-     
-    handles = guidata(hObject);
-    
-    if exist('optional_filename', 'var')
-        fullFileName = optional_filename;
-    else
-        [fileName, filePath] = uigetfile('*.h5','open file - HDF5 (*.h5)'); % open file
-
-        fullFileName = [filePath fileName];
-    end
-    
-    if ~MPBus.verifyFile(fullFileName, '.h5')
-        return;
-    end
-
-
-    % just pull the image stack from this file
-    info = h5info(fullFileName);
-    for groupIndex = 1 : length(info.Groups)
-        groupName = info.Groups(groupIndex).Name;
-        
-        foundIndex = strfind(groupName, 'ImageCh');
-        
-        if ~isempty(foundIndex)
-            imageGroup = groupName;
-        end
-    end
- 
-    groupInfo = h5info(fullFileName, imageGroup);
-    imageSize = groupInfo.Datasets(1).Dataspace.Size;
-
-    
-    handles.imageStack = zeros( imageSize(1), imageSize(2), ...
-                            length(groupInfo.Datasets), 'int16');
-    
-    for datasetIndex = 1 : length(groupInfo.Datasets)   
-        datasetPath = sprintf('%s/%s', imageGroup, groupInfo.Datasets(datasetIndex).Name); 
-        handles.imageStack(:, :, datasetIndex) = ...
-                            transpose( h5read(fullFileName, datasetPath) );    
-    end
-    
-    guidata(handles.main, handles);
-end
 
 function convertFile(hObject, ~)
     handles = guidata(hObject);
@@ -1106,6 +1017,24 @@ function resetImage(hObject, ~)
 end
 
 function calculateDiameter(hObject, ~)
+    handles = guidata(hObject);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        results = diameter(handles.exImageData);
+        
+        handles.diameter = results;
+        % make the results visible
+        set(handles.axes_results, 'Visible', 'on');
+        drawFrame(handles);
+
+        %TODO: outputDiameter summarizes the diameter calculation with a
+        %plot and it's corresponding vector which gets sent to the current
+        %MPWorkspace (the Base Workspace unless Path Analyze was called
+        %from MPAnalyze)
+        %outputDiameter(handles, diameterVector, fitToGaussianFlag)
+    
+        guidata(handles.main, handles);
+    end
 end
 
 function calculateIntensity(hObject, ~)
@@ -1148,11 +1077,16 @@ function exportActiveRegion(hObject, ~)
     % export the active region
     handles = guidata(hObject);
     
-    domain = [ handles.activeRegion.leftBoundary,...
-                handles.activeRegion.rightBoundary ];
-    % calculator() opens the Calculator GUI
-    calculator(handles.mpbus, domain, handles.windowPeriod,...
-                                        true, handles.colormap); 
+    if ~isempty(handles.activeRegion)
+
+        domain = [ handles.activeRegion.leftBoundary,...
+                    handles.activeRegion.rightBoundary ];
+
+        handles = readFrames(handles, domain, handles.windowPeriod); 
+
+        toggleCalculator(handles);
+        guidata(handles.main, handles);
+    end
 end
 
 function mouseWheelScroll(hObject, eventdata)
@@ -1177,85 +1111,286 @@ function mouseWheelScroll(hObject, eventdata)
 end
 
 
+function resizeFigure(hObject, ~)
+    handles = guidata(hObject);
+    
+    % if there is an image loaded then the figure should be drawn such that
+    % the top view panel is the same size as the top view axes
+    
+    % delete all graphics handles so that they can be redrawn
+    clf
+    
+    handles = populateGUI(handles);
+    handles = createLineSlider(handles);
+    guidata(hObject, handles);
+    
+    refreshAll(handles);
+    
+end
 %%% END CALLBACKS
 
 
-function handles = createSideSlider(handlesToUpdate, range, ticks_click, ticks_drag)
-    %check to see if the slider already exists then create a new one
+%% Image Extraction/Calculation Functions 
+function handles = readFrames(handles, domain, windowPeriod)
+
+    % read in image data
+    frameWidth = domain(2) - domain(1) + 1;
+    frameHeight = windowPeriod;
+    nFrames = floor( handles.mpbus.ysize * handles.mpbus.numFrames / frameHeight );
     
-    % the range and tick arguments are optional, set them to default values
-    % if they weren't specified
-    if ~exist('range', 'var')
-        range = 1:100;
-    end
-    if ~exist('ticks_click', 'var')
-        ticks_click = 1;
-    end
-    if ~exist('ticks_drag', 'var')
-        ticks_drag = 10;
-    end
+    handles.exImageWidth = (domain(2) - domain(1) + 1)...
+                        * handles.IMAGE_SCALE_FACTOR;
+    handles.exImageHeight = windowPeriod * handles.IMAGE_SCALE_FACTOR;
     
-    NORMAL_BUFFER = .01;
-    handles = handlesToUpdate;
+    % TESTING -- just loading 100 frames for now
+    %nFrames = 200;
+    % END TESTING
     
-    if isfield(handles, 'slider_sideView')
-        delete(handles.slider_sideView);
-    end
+    % initialize a waitbar
+    waitbarHandle = waitbar(0, 'Time Remaining: ',...
+                            'Name', 'Extracting...',...
+                            'WindowStyle', 'modal' );
     
-    if ~isfield(handles, 'axes_sideView') || ~isfield(handles, 'panel_sideView')
-        % can't create the slider if the axes don't exist so just exit
-        return;
-    end
+    %exportFile = matfile(EXPORT_FILE_NAME, 'Writable', true);
+    %exportFile.data = zeros(frameHeight, frameWidth, nFrames, 'int16' );
+    handles.exImageData = zeros(frameHeight, frameWidth, nFrames, 'int16' );
+    handles.nFrames = nFrames;
+    
+    startTime = clock;
+    for frameIndex = 1 : nFrames
+        finishLine = frameIndex * frameHeight;
+        startingLine = finishLine - frameHeight + 1;
+    
+        frameData = handles.mpbus.readLines(startingLine : finishLine);
+        frameDataCropped = frameData(: , domain(1) : domain(2));
         
-    % determine dimensions of the slider
-    axesPixelPosition = getpixelposition(handles.axes_sideView);
-    axesNormalPosition = get(handles.axes_sideView, 'Position');
+        handles.exImageData( :, :, frameIndex) = frameDataCropped;
+        
+        % also, calculate how much time is remaining
+        currentTime = clock;
+        elapsedTime = etime(currentTime, startTime);
+        secondsPerFrame = elapsedTime / frameIndex;
+        secondsRemaining = floor(( nFrames - frameIndex ) * secondsPerFrame);
+        waitbarMessage = sprintf('About %d seconds remaining.', secondsRemaining);
+        
+        waitbar(frameIndex/nFrames, waitbarHandle, waitbarMessage);
+    end
     
-    height = axesNormalPosition(4);
+    close(waitbarHandle);
     
-    normalWidth = axesNormalPosition(3);
-    pixelWidth = axesPixelPosition(3);
-    
-    width = handles.SLIDER_WIDTH * normalWidth / pixelWidth;
-    
-    x = axesNormalPosition(1) + normalWidth + NORMAL_BUFFER;
-    y = axesNormalPosition(2);
-  
-    maxValue = range(end);
-    
-    handles.slider_sideView = uicontrol(...
-        'Parent',handles.panel_sideView,...
-        'Units','normalized',...
-        'BackgroundColor',[0.9 0.9 0.9],...
-        'Callback',@slider_sideView_Callback,...
-        'Position',[x y width height],...
-        'String',{  'Z Axis' },...
-        'Style','slider',...
-        'Tag','slider_sideView',...
-        'Min', range(1),...
-        'Max', maxValue,...
-        'Value', range(1),...
-        'SliderStep', [ticks_click/maxValue , ticks_drag/maxValue ]);
+    set(handles.main, 'CurrentAxes', handles.axes_exImage);
+    drawFrame(handles, 0, 1);  
 end
-function handles = createLineSlider(handlesToUpdate, range, ticks_click, ticks_drag)
+
+%%% Drawing Functions
+function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
+    % do not specify a frameNumber when this function is first called
+    persistent frameNumber;
+    
+    if isempty(frameNumber)
+        frameNumber = 1;
+    end
+    
+    if ~exist('startingFrame', 'var')
+        startingFrame = 1;
+    else
+        frameNumber = startingFrame;
+    end
+    if ~exist('nFramesToAdvance', 'var')
+        nFramesToAdvance = 0;
+    end
+
+  
+    frameNumber = frameNumber + nFramesToAdvance;
+    
+    % check for overflow
+    if frameNumber <= 0
+        frameNumber = handles.nFrames;
+    elseif frameNumber > handles.nFrames
+        frameNumber = 1;
+    end
+
+    if frameNumber == size(handles.exImageData, 3)
+        % this is the last frame, return end of file (eof)
+        eof = true;
+    elseif frameNumber > size(handles.exImageData, 3)
+        % beyond the last frame
+        frameNumber = 1;
+        eof = true;
+        return; 
+    else
+        eof = false;
+    end
+    
+    set(handles.main, 'CurrentAxes', handles.axes_exImage);
+    imagesc(handles.exImageData(:,:,frameNumber));
+    axis off
+    colormap(handles.colormap); 
+    
+    % also draw any diameter calculation results
+    if isfield(handles, 'diameter')
+        diameterStruct = handles.diameter(frameNumber);
+        
+        set(handles.main, 'CurrentAxes', handles.axes_results);
+        cla
+        plot(diameterStruct.image);
+        set(gca,'xtick',[], 'ytick',[], 'xlim', [1, handles.imageWidth]);
+        hold on
+        
+        % draw the FWHM lines as well
+        X = [ diameterStruct.leftWidthPoint, ...
+            diameterStruct.rightWidthPoint ];
+        
+        Y = ylim;
+        
+        line([X(1), X(1)], Y, 'Linestyle', ':', 'Color', 'black');
+        line([X(2), X(2)], Y, 'Linestyle', ':', 'Color', 'black');
+        
+        % and the Gaussian fit
+        coefficients = diameterStruct.coefficients;
+        if ~isempty(coefficients)
+            a = coefficients(1);
+            b = coefficients(2);
+            c = coefficients(3);
+
+            gaussX = 1 : length(diameterStruct.image);
+            gaussY = a * exp( -1/2 .* ( (gaussX - b) ./ c ).^2 );
+
+            plot(gaussX, gaussY, 'r');
+        end
+        
+    end
+    
+    set(handles.edit_frameNumber, 'String', frameNumber);
+end
+
+function animateFrames(~, ~, handles)
+    eof = drawFrame(handles, 1);
+    
+    if eof
+        play_callback(handles.main, []);
+    end
+end
+%%% CALLBACKS
+function play_callback(hObject, ~)
+    persistent lastCommandIsPlay;
+    MAX_FPS = 60;
+    MIN_FPS = 1;
+    
+    handles = guidata(hObject);
+    
+    % get the requested frames per second
+    fps = str2double(get(handles.edit_fps, 'String'));
+    if isnan(fps)
+        fps = handles.DEFAULT_FPS;
+    else
+        % ensure fps is between the min and max allowed fps
+        fps = min( [ max( [fps, MIN_FPS] ), MAX_FPS ] ); 
+    end
+    
+    set(handles.edit_fps, 'String', fps);
+
+    if ~isfield(handles, 'animationTimer')
+        handles.animationTimer = timer(...
+           'ExecutionMode','fixedRate',...  
+           'Period', ceil(1000/fps)/1000,...
+           'TimerFcn',{@animateFrames,handles});
+    end
+    
+    if isempty(lastCommandIsPlay)
+        lastCommandIsPlay = false;
+    end
+    
+    if lastCommandIsPlay
+        stop(timerfind);
+        lastCommandIsPlay = false;
+        set(handles.button_play, 'String', '>');
+    else
+        lastCommandIsPlay = true;
+        start(handles.animationTimer);
+        set(handles.button_play, 'String', '| |');
+    end    
+end
+
+function next_callback(hObject, ~)
+    handles = guidata(hObject);
+    drawFrame(handles, 1);
+end
+
+function previous_callback(hObject, ~)
+    handles = guidata(hObject);
+    drawFrame(handles, -1);
+end
+
+function first_callback(hObject, ~)
+    handles = guidata(hObject);
+    drawFrame(handles, 0, 1);
+end
+
+function last_callback(hObject, ~)
+    handles = guidata(hObject);
+    drawFrame(handles, 0, handles.nFrames);
+end
+
+function toggleCalculator(handles)
+
+    % if there is no extracted image data, hide all the calculator controls
+    calcHandles = findall(handles.panel_calculator, 'Tag', 'calculator');
+    extractHandles = findall(handles.main, 'Tag', 'extract');
+    if ~isfield(handles, 'exImageData') || isempty(handles.exImageData)
+       
+        set(calcHandles, 'Visible', 'off');
+        set(extractHandles, 'Visible', 'on');
+    else
+        set(calcHandles, 'Visible', 'on');
+        set(extractHandles, 'Visible', 'off');
+    end
+    
+
+end
+
+function clearCalculator(hObject, ~)
+    handles = guidata(hObject);
+    
+    % clear both calculator axes
+    cla(handles.axes_exImage);
+    cla(handles.axes_results);
+    
+    % then hide all the calculator controls
+    handles.exImageData = [];
+    toggleCalculator(handles);
+    
+    guidata(hObject, handles);
+end
+
+function saveCalculator(hObject, ~)
+    disp('save is not functional yet');
+end
+
+%% GUI Creation Functions
+
+function handles = createLineSlider(handles, range)
+    persistent lastRange;
     %check to see if the slider already exists then create a new one
     
     % the range and tick arguments are optional, set them to default values
     % if they weren't specified
     if ~exist('range', 'var')
-        range = 1:100;
+        if ~isempty(lastRange)
+            range = lastRange;
+        else
+            range = 1:100;
+        end
     end
-    if ~exist('ticks_click', 'var')
-        ticks_click = 1;
-    end
-    if ~exist('ticks_drag', 'var')
-        ticks_drag = 10;
-    end
+    
+    lastRange = range;
+    
+    TICKS_CLICK = 10;
+    TICKS_DRAG = 100;
     
     NORMAL_BUFFER = 0;
-    handles = handlesToUpdate;
     
-    if isfield(handles, 'slider_lineScan')
+    if isfield(handles, 'slider_lineScan') && ishghandle(handles.slider_lineScan)
         delete(handles.slider_lineScan);
     end
     
@@ -1292,7 +1427,7 @@ function handles = createLineSlider(handlesToUpdate, range, ticks_click, ticks_d
         'Min', range(1),...
         'Max', maxValue,...
         'Value', range(end),...
-        'SliderStep', [ticks_click/maxValue , ticks_drag/maxValue ]);
+        'SliderStep', [TICKS_CLICK/maxValue , TICKS_DRAG/maxValue ]);
 end
 
 % TODO: Seperate createGUI into at least two functions so that controls can be
@@ -1314,68 +1449,113 @@ handles.main = figure(...
     'Visible','on',...
     'WindowScrollWheelFcn', @mouseWheelScroll);
 
-handles = createControlPanel(handles);
+    
+    handles = populateGUI(handles);
 
-%%% TOP VIEW
-handles.panel_topView = uipanel(...
-    'Parent',handles.main,...
-    'Title','Top Down View',...
-    'Clipping','on',...
-    'Position',[0.18 0.46 0.4 0.5],...
-    'Tag','panel_topView' );
 
-handles.axes_topView = axes(...
-    'Parent',handles.panel_topView,...
-    'Position',[0.025 0.05 0.9 0.9],...
-    'XTick', [],...
-    'YTick', [],...
-    'Tag','axes_topView' );
+end
+
+function handles = populateGUI(handles)
+    % this function is called when the GUI is created (from createGUI) and
+    % every time the figure is resized.
+    % imageWidth is passed in when data is loaded so that the panel
+    % containing the axes is correctly sized
+
+    % all variables/constants that determine graphics object placement on
+    % the figure will be assigned here:
+    handles.BUTTON_WIDTH = 80;
+    handles.BUTTON_HEIGHT = 25;
+    handles.PADDING = 10;
+
+    % create vertical and horizontal "anchors"
+    figurePixelPosition = getpixelposition(handles.main);
+    figureSize = [ figurePixelPosition(3), figurePixelPosition(4) ];
+    
+    % horizontal anchor
+    hAnchor = figureSize(2) / 2.5;
+    
+    
+%%% TOP VIEW    
+    topView_x = handles.PADDING;
+    topView_y = hAnchor;
+    topView_height = (figureSize(2) - hAnchor) - handles.PADDING;
+    topView_width = topView_height;         % assuming square image
+    
+    handles.panel_topView = uipanel(...
+        'Parent',handles.main,...
+        'Title','Top Down View',...
+        'Clipping','on',...
+        'Units', 'pixels',...
+        'Position',[ topView_x, topView_y, topView_width, topView_height ],...
+        'Tag','panel_topView' );
+    
+    topAxesPadding = handles.PADDING / topView_width;
+    handles.axes_topView = axes(...
+        'Parent',handles.panel_topView,...
+        'Units', 'normalized',...
+        'Position',[topAxesPadding, topAxesPadding, (1 - topAxesPadding), (1 - topAxesPadding)],...
+        'XTick', [],...
+        'YTick', [],...
+        'Tag','axes_topView' );
 %%%
 
-%%% SIDE VIEW
-handles.panel_sideView = uipanel(...
-    'Parent',handles.main,...
-    'Title','Side View',...
-    'Clipping','on',...
-    'Position',[0.585 0.46 0.4 0.5],...
-    'Tag','panel_sideView' );
+%%% CONTROL PANEL
+ % create the selected region and path info panels
+    cp_x = topView_x + topView_width;
+    cp_y = hAnchor;
+    cp_width = handles.BUTTON_WIDTH * 2;
+    cp_height = (figureSize(2) - hAnchor) - handles.PADDING;
+    handles.panel_control = uipanel(...
+        'Parent',handles.main,...
+        'Title','Selected Region',...
+        'Clipping','on',...
+        'Units', 'pixels',...
+        'Position',[cp_x cp_y cp_width cp_height],...
+        'Tag','panel_control' );
+%%%
 
-handles.axes_sideView = axes(...
-    'Parent',handles.panel_sideView,...
-    'Position',[0.025 0.05 0.9 0.9],...
-    'XTick', [],...
-    'YTick', [],...
-    'Tag','axes_sideView' );
+%%% CALCULATION PANEL
+    x = cp_x + cp_width;
+    y = hAnchor;
+    width = figureSize(1) - x - handles.PADDING;
+    height = topView_height;
+    handles.panel_calculator = uipanel(...
+        'Parent',handles.main,...
+        'Title','Calculations',...
+        'Clipping','on',...
+        'Units', 'pixels',...
+        'Position',[ x, y, width, height ],...
+        'Tag','panel_calculator' );
 %%%
 
 %%% LINE SCAN
-handles.panel_lineScan = uipanel(...
-    'Parent',handles.main,...
-    'Title','Line Scan',...
-    'Clipping','on',...
-    'Position',[0.012 0.007 0.973 0.453],...
-    'Tag','panel_lineScan' );
-
-handles.axes_lineScan = axes(...
-    'Parent',handles.panel_lineScan,...
-    'Position',[0.02 0.088 0.955 0.9],...
-    'XTick', [],...
-    'YTick', [],...
-    'Tag','axes_lineScan' );
-
-%{
-handles.button_timeWindow = uicontrol(...
-    'Parent',handles.panel_lineScan,...
-    'Style', 'pushbutton',...
-    'Units','normalized',...
-    'Position', [0.007 0.8 0.075 0.09],...
-    'Min',0,...
-    'Max',1,...
-    'String', 'Time Interval',...
-    'Callback', @displayTimeInterval);
-%}
+    x = handles.PADDING;
+    y = handles.PADDING;
+    width = figureSize(1) - handles.PADDING;
+    height = hAnchor - handles.PADDING;
+    handles.panel_lineScan = uipanel(...
+        'Parent',handles.main,...
+        'Title','Scan Data',...
+        'Clipping','on',...
+        'Units', 'pixels',...
+        'Position',[x y width height],...
+        'Tag','panel_lineScan' );
+    lsPadding = handles.PADDING / width;
+    handles.axes_lineScan = axes(...
+        'Parent',handles.panel_lineScan,...
+        'Position',[lsPadding 0.088 0.955 0.9],...
+        'XTick', [],...
+        'YTick', [],...
+        'Tag','axes_lineScan' );
 %%%
 
+    handles = populateControlPanel(handles);
+    handles = populateCalculationPanel(handles);
+    handles = createMenu(handles);
+    
+end
+
+function handles = createMenu(handles)
 
 %%% UI MENU
 handles.menu_file = uimenu(...
@@ -1387,14 +1567,8 @@ handles.menu_open = uimenu(...
     'Parent',handles.menu_file,...
     'Accelerator','O',...
     'Callback',@loadScanFile,...
-    'Label','Open Scan File...',...
+    'Label','Open...',...
     'Tag','menu_open' );
-
-handles.menu_openStack = uimenu(...
-    'Parent',handles.menu_file,...
-    'Callback',@loadStackFile,...
-    'Label','Open Z-Stack File...',...
-    'Tag','menu_openStack' );
 
 handles.menu_convert = uimenu(...
     'Parent',handles.menu_file,...
@@ -1529,24 +1703,15 @@ handles.menu_velocity = uimenu(...
     'Tag','menu_velocity' );
 
 %%%
-
 end
 
-function handles = createControlPanel(handlesIn)
-    handles = handlesIn;
+function handles = populateControlPanel(handles)
     
-    %%% CONTROLS
-    handles.panel_controls = uipanel(...
-        'Parent',handles.main,...
-        'Title','Selected Region',...
-        'Clipping','on',...
-        'Position',[0.014 0.46 0.15 0.5],...
-        'Tag','panel_controls' );
 
-    panel_bounds = getpixelposition(handles.panel_controls);
+    panel_bounds = getpixelposition(handles.panel_control);
+
     buttonWidth = handles.BUTTON_WIDTH / panel_bounds(3);
     buttonHeight = handles.BUTTON_HEIGHT / panel_bounds(4);
-
     padding_x = 2 / panel_bounds(3);
     padding_y = 2 / panel_bounds(4);
     
@@ -1562,7 +1727,7 @@ function handles = createControlPanel(handlesIn)
     rowY = 1 - ( 0.2 : labelHeight : 0.9 );
     %%% REGION WIDTH
     handles.label_regionWidth = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column1_x, rowY(1), labelWidth, labelHeight ],...
@@ -1572,7 +1737,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.edit_regionWidth_px = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
@@ -1582,7 +1747,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.label_regionWidth_px = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column1_x + editWidth, rowY(2), unitsWidth, unitsHeight ],...
@@ -1591,7 +1756,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.edit_regionWidth_mv = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
@@ -1601,7 +1766,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.label_regionWidth_mv = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column2_x + editWidth, rowY(2), unitsWidth, unitsHeight ],...
@@ -1612,7 +1777,7 @@ function handles = createControlPanel(handlesIn)
     
     %%% REGION HEIGHT
      handles.label_regionHeight = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column1_x, rowY(4), labelWidth, labelHeight ],...
@@ -1622,7 +1787,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.edit_regionHeight_px = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
@@ -1632,7 +1797,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.label_regionHeight_px = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column1_x + editWidth, rowY(5), unitsWidth, unitsHeight ],...
@@ -1641,7 +1806,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
     
     handles.edit_regionHeight_ms = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
@@ -1651,7 +1816,7 @@ function handles = createControlPanel(handlesIn)
         'Enable','off' );
 
     handles.label_regionHeight_ms = uicontrol(...
-        'Parent', handles.panel_controls,...
+        'Parent', handles.panel_control,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ column2_x + editWidth, rowY(5), unitsWidth, unitsHeight ],...
@@ -1661,8 +1826,104 @@ function handles = createControlPanel(handlesIn)
     
     %%% END REGION HEIGHT
 
+   
+    %%%
+    
+end
+
+function handles = populateCalculationPanel(handles)
+    MAX_MAGNIFICATION = 3;      % don't enlarge the image by a factor any
+                                % larger than this
+    
+   handles.DEFAULT_FPS = 12;
+   
+   %testing
+   handles.exImageWidth = 40;
+   handles.exImageHeight = 100;
+   
+   % working width and height are the dimensions of the area that can be
+   % used by the calculation graphics objects
+   calculationPanelPosition = getpixelposition(handles.panel_calculator);
+   workingWidth = calculationPanelPosition(3);
+   workingHeight = calculationPanelPosition(4);
+    
+    %%% Control Panel
+    panelWidth = (handles.BUTTON_WIDTH * 2) / workingWidth;
+    panelHeight = 0.7; 
+    
+    editWidth = 50 / ( panelWidth * workingWidth );
+    editHeight = 20 / ( panelHeight * workingHeight );
+    labelWidth = 2 * editWidth;
+    labelX = 0;
+    editX = labelX + labelWidth + 2 * handles.PADDING / workingWidth;
+    yLocations = 1 - (1:8) * editHeight;
+    
+    handles.panel_calcControl = uipanel(...
+    'Parent',handles.panel_calculator,...
+    'Clipping','off',...
+    'BorderType','none',...
+    'Position',[0 0.2 panelWidth panelHeight],...
+    'Tag','panel_controls' );
+
+    handles.label_frameNumber = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'text',...
+        'Units', 'normalized',...
+        'HorizontalAlignment', 'right',...
+        'Position', [ labelX yLocations(1) labelWidth editHeight ],...
+        'String', 'Frame',...
+        'Tag', 'calculator');
+
+    handles.edit_frameNumber = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style','edit',...
+        'Units', 'normalized',...
+        'Enable', 'inactive',...
+        'Position', [editX yLocations(1) editWidth editHeight],...
+        'Tag', 'calculator' );
+    
+    handles.label_fps = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'text',...
+        'Units', 'normalized',...
+        'HorizontalAlignment', 'right',...
+        'Position', [ labelX yLocations(3) labelWidth editHeight ],...
+        'String', 'Frames Per Second',...
+        'Tag', 'calculator' );
+
+    handles.edit_fps = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style','edit',...
+        'Units', 'normalized',...
+        'BackgroundColor', 'white',...
+        'String', handles.DEFAULT_FPS,...
+        'Position', [editX yLocations(3) editWidth editHeight],...
+        'Tag', 'calculator' );
+    
+    handles.button_clear = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Clear',...
+        'Callback', @clearCalculator,...
+        'Position', [ editX yLocations(5) editWidth editHeight ],...
+        'Tag', 'calculator' );
+        
+
+    handles.button_save = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Save',...
+        'Callback', @saveCalculator,...
+        'Position', [ editX yLocations(6) editWidth editHeight ],...
+        'Tag', 'calculator' );
+  
+    %{
+    buttonWidth = handles.BUTTON_WIDTH / panelWidth;
+    buttonHeight = handles.BUTTON_HEIGHT / panelHeight;
     handles.button_export = uicontrol(...
-        'Parent',handles.panel_controls,...
+        'Parent',handles.panel_calcControl,...
         'Style','pushbutton',...
         'Units','normalized',...
         'Position',[(1-buttonWidth)/2, 0.1, buttonWidth, buttonHeight],...
@@ -1670,6 +1931,145 @@ function handles = createControlPanel(handlesIn)
         'Callback',@exportActiveRegion,...
         'Tag','activeRegionControl',...
         'Enable','off' );
+   %}
+    %%% END Control Panel
+    
+    %%% Main Axes
+    % THIS IS THE ONLY GRAPHICS OBJECT THAT IS IN UNITS OF PIXELS (other
+    % than the figure itself)
+    % the maximum axes height is the control panel height (in pixels)
+    controlPanelBounds = getpixelposition(handles.panel_calcControl);
+    panelPixelWidth = controlPanelBounds(3);
+    panelPixelHeight = controlPanelBounds(4);
+    panelPixelX = controlPanelBounds(1);
+    panelPixelY = controlPanelBounds(2);
+    
+    heightScale = panelPixelHeight / handles.exImageHeight;
+    widthScale = panelPixelWidth / handles.exImageWidth;
+    
+    % choose the smallest scale factor as the overall magnification
+    % (with an upper bound set by MAX_MAGNIFICATION)
+    magnification = min( [heightScale, widthScale, MAX_MAGNIFICATION] );
+    
+    
+    axesHeight = handles.exImageHeight * magnification;
+    axesWidth = handles.exImageWidth * magnification;
+    axesX = panelPixelX + panelPixelWidth;
+    axesY = panelPixelY;
+   
+    axesNormCenterX = ( axesX + 0.5 * axesWidth ) / workingWidth;
+    
+    handles.axes_exImage = axes(...
+        'Parent',handles.panel_calculator,...
+        'Units','pixels',...
+        'Position',[axesX axesY axesWidth axesHeight],...
+        'XTick', [],...
+        'YTick', [],...
+        'Tag', 'calculator' );
+    
+    % also create an axes for calculation results
+    handles.axes_results = axes(...
+        'Parent',handles.panel_calculator,...
+        'Units','pixels',...
+        'Position',[(axesX + axesWidth + 30) axesY axesWidth axesHeight],...
+        'XTick', [],...
+        'YTick', [],...
+        'Visible', 'off' );
+    
+    %%% END Main Axes
+   
+    
+    %%% Movie Buttons
+    
+    buttonPixelWidth = 25;
+    buttonPixelHeight = 25;
+    
+    panelPixelWidth = 5 * ( buttonPixelWidth + handles.PADDING );
+    panelPixelHeight = buttonPixelHeight + 2 * handles.PADDING;
+    
+    panelWidth = panelPixelWidth / workingWidth;
+    panelHeight = panelPixelHeight / workingHeight;
+    
+    panelX = axesNormCenterX - 0.5 * panelWidth;
+    panelY = 0.05;
+    buttonWidth = buttonPixelWidth / panelPixelWidth;
+    buttonHeight = buttonPixelHeight / panelPixelHeight;
+    
+    buttonY = handles.PADDING / panelPixelHeight;
+    playX = (1 - buttonWidth) / 2;
+    nextX = playX + buttonWidth + 0.01;
+    previousX = playX - buttonWidth - 0.01;
+    lastX = playX + 2 * ( buttonWidth + 0.01 );
+    firstX = playX - 2 * ( buttonWidth + 0.01 );
+    
+    
+    handles.panel_movie = uipanel(...
+        'Parent',handles.panel_calculator,...
+        'Clipping','off',...
+        'Position',[panelX panelY panelWidth panelHeight],...
+        'Tag', 'calculator' );
+
+    handles.button_play = uicontrol(...
+        'Parent',handles.panel_movie,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[playX buttonY buttonWidth buttonHeight],...
+        'Callback', @play_callback,...
+        'String','>' );
+    
+    handles.button_next = uicontrol(...
+        'Parent',handles.panel_movie,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[nextX buttonY buttonWidth buttonHeight],...
+        'Callback', @next_callback,...
+        'String','>>' );
+    
+    handles.button_previous = uicontrol(...
+        'Parent',handles.panel_movie,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[previousX buttonY buttonWidth buttonHeight],...
+        'Callback', @previous_callback,...
+        'String','<<' );
+    
+    handles.button_first = uicontrol(...
+        'Parent',handles.panel_movie,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[firstX buttonY buttonWidth buttonHeight],...
+        'Callback', @first_callback,...
+        'String','|<<' );
+
+    handles.button_last = uicontrol(...
+        'Parent',handles.panel_movie,...
+        'Style','pushbutton',...
+        'Units','normalized',...
+        'Position',[lastX buttonY buttonWidth buttonHeight],...
+        'Callback', @last_callback,...
+        'String','>>|' );
+    %%% END Movie Buttons
+    
+    
+    %%% EXTRACT BUTTON (only visible when nothing has been extracted yet)
+    panelBounds = getpixelposition(handles.panel_calculator);
+    
+    width = 2 * handles.BUTTON_WIDTH / panelBounds(3);
+    height = handles.BUTTON_HEIGHT / panelBounds(4);
+    x = (1 - width) / 2;
+    y = (1 - height) / 2;
+    handles.button_extract = uicontrol(...
+        'Parent', handles.panel_calculator,...
+        'Style', 'pushbutton',...
+        'Units','normalized',...
+        'String', 'Extract Selected Region',...
+        'Position',[ x y width height],...
+        'Callback', @exportActiveRegion,...
+        'Enable', 'off',...
+        'Tag', 'extract');
     %%%
     
+    
+    toggleCalculator(handles);
+   
 end

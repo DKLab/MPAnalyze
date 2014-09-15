@@ -1,10 +1,11 @@
-function calculator( mpbus, domain, windowPeriod, showGUI, defaultColormap )
+function calculator( mpbus, domain, windowPeriod, defaultColormap )
 %CALCULATOR pulls data from an MPScope HDF5 file and saves it as frames
 %that are the same height as the windowPeriod and the same width as the domain
-%   Detailed explanation goes here
+
     
     handles = struct();
-    handles.IMAGE_SCALE_FACTOR = 2;
+    handles.IMAGE_SCALE_FACTOR = 1;
+    handles.FWHM_TO_DIAMETER = 1; % / 0.866;
     
     if ~exist('mpbus', 'var')
         handles.mpbus = MPBus();
@@ -13,7 +14,7 @@ function calculator( mpbus, domain, windowPeriod, showGUI, defaultColormap )
     end
     
     scanData = handles.mpbus.scanData;
-    handles.savedCalculationFlag = isfield(scanData, 'savedCalcualtion');
+    handles.savedCalculationFlag = isfield(scanData, 'savedCalculation');
     
     if ~exist('domain', 'var')
         domain = [0,0];
@@ -21,10 +22,6 @@ function calculator( mpbus, domain, windowPeriod, showGUI, defaultColormap )
     
     if ~exist('windowPeriod', 'var')
         windowPeriod = 0;
-    end
-    
-    if ~exist('showGUI','var')
-        showGUI = true;
     end
     
     if ~exist('defaultColormap', 'var')
@@ -49,38 +46,53 @@ function calculator( mpbus, domain, windowPeriod, showGUI, defaultColormap )
 end
 
 function initialize(handles)
+    figureWidth = 500;
+    figureHeight = 300;
 
-
-    handles = createFigure( handles, 500, 300 );
+    handles = createFigure( handles, figureWidth, figureHeight );
     
     if handles.savedCalculationFlag
         % load the saved calculation
-        openFile(hObject, []);
+        handles = openFile(handles);
         
         handles = populateGUI(handles, figureWidth, figureHeight);
         guidata(handles.main, handles);
     else
         % no saved calculation, get image data
         
-
-        handles.imageWidth = (handles.domain(2) - handles.domain(1) + 1)...
+        % if domain and period are not set then calculator() was not called
+        % from PathAnalyze -- in that case prompt the user to open a file
+        if any(handles.domain == 0)
+            % prompt user to open a saved calculation
+            handles = openFile(handles);
+            handles = populateGUI(handles, figureWidth, figureHeight);
+            
+            % show the diameter plot (and output the diameter vector)
+            diameterVector = [handles.diameter.fwhm] .* handles.FWHM_TO_DIAMETER;
+            outputDiameter(handles, diameterVector);
+        else
+            % extract the image from line scan data provided by the MPBus
+            % that was passed in from Path Analyze
+             handles.imageWidth = (handles.domain(2) - handles.domain(1) + 1)...
                                 * handles.IMAGE_SCALE_FACTOR;
-        handles.imageHeight = handles.windowPeriod * handles.IMAGE_SCALE_FACTOR;
-        
-        handles = populateGUI(handles, figureWidth, figureHeight);
-        handles = readFrames(handles);
+             handles.imageHeight = handles.windowPeriod * handles.IMAGE_SCALE_FACTOR;
+             
+             handles = populateGUI(handles, figureWidth, figureHeight);
+             handles = readFrames(handles);
+        end
 
+        % return focus to this figure
+        figure(handles.main);
+        
         guidata(handles.main, handles);
 
     end
-    
-    
-    
+
     % set the default colormap
     selectColormap(handles.main, [], handles.colormap);  
     
     % update the saveRange edit box
-        saveRange_callback(handles.edit_saveRange, []);
+    saveRange_callback(handles.edit_saveRange, []);
 
 end
 
@@ -137,6 +149,10 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     % do not specify a frameNumber when this function is first called
     persistent frameNumber;
     
+    if isempty(frameNumber)
+        frameNumber = 1;
+    end
+    
     if ~exist('startingFrame', 'var')
         startingFrame = 1;
     else
@@ -180,7 +196,7 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
         set(handles.main, 'CurrentAxes', handles.axes_results);
         cla
         plot(diameterStruct.image);
-        set(gca,'xtick',[], 'ytick',[], 'xlim', [1, handles.imageWidth/2]);
+        set(gca,'xtick',[], 'ytick',[], 'xlim', [1, handles.imageWidth]);
         hold on
         
         % draw the FWHM lines as well
@@ -300,8 +316,6 @@ function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
     
     SMOOTHING = 1;
-    FWHM_TO_DIAMETER_GAUSSIAN = 1 / 0.866;  % was 1/0.707
-    FWHM_TO_DIAMETER_IMAGE = 1 / 0.866;
     
     % the user can choose to do a fast calculation (width is based on
     % threshold values) or a slow calculation (data is fit to a gaussian
@@ -314,13 +328,7 @@ function calculateDiameter(hObject, ~)
     slow = 'Gaussian (slow)';
     answer = questdlg(qstring, title, fast, slow, fast); 
     
-    if strcmp(answer, slow);
-        fitToGaussianFlag = true;
-        fwhmConversion = FWHM_TO_DIAMETER_GAUSSIAN;
-    else
-        fitToGaussianFlag = false;
-        fwhmConversion = FWHM_TO_DIAMETER_IMAGE;
-    end
+    fitToGaussianFlag = strcmp(answer, slow);
     
     handles.diameter = struct(...
         'image', [],...
@@ -348,8 +356,8 @@ function calculateDiameter(hObject, ~)
                           calcFWHM(dataVector, SMOOTHING, fitToGaussianFlag);
         
 
-        widthDifference = (fwhmConversion - 1) * fwhm;
-        diameterVector(frameIndex) = fwhmConversion * fwhm; 
+        widthDifference = (handles.FWHM_TO_DIAMETER - 1) * fwhm;
+        diameterVector(frameIndex) = handles.FWHM_TO_DIAMETER * fwhm; 
         
         handles.diameter(frameIndex).image = dataVector;
         handles.diameter(frameIndex).fwhm = fwhm;
@@ -375,27 +383,37 @@ function calculateDiameter(hObject, ~)
     end
     
     close(waitbarHandle);
-    set(handles.main, 'CurrentAxes', handles.axes_main);
-    
-    % output the total calculated diameter (diameterVector)
-    if fitToGaussianFlag
-        calcType = 'gaussian';
-    else
-        calcType = 'fast';
-    end
-    varName = sprintf('diameter_%s', calcType);
-    handles.mpbus.output(varName, diameterVector, 'Path Analyze');
-    
     
     % make the results axes visible
     set(handles.axes_results, 'Visible', 'on');
-    
+    set(handles.main, 'CurrentAxes', handles.axes_main);
     drawFrame(handles);
+    
+    outputDiameter(handles, diameterVector, fitToGaussianFlag)
+    
+    guidata(handles.main, handles);
+end
+
+function outputDiameter(handles, diameterVector, fitToGaussianFlag)
+    % output the total calculated diameter (diameterVector)
+    
+    if exist('fitToGaussianFlag', 'var')
+        if fitToGaussianFlag
+            calcType = 'gaussian';
+        else
+            calcType = 'fast';
+        end
+    else
+        % calling this function with only 2 arguments will change the
+        % output variable name to diameter_saved
+        calcType = 'saved';
+    end
+    
+    varName = sprintf('diameter_%s', calcType);
+    handles.mpbus.output(varName, diameterVector, 'Path Analyze');
     
     % open a new window with the total diameter data
     figure, plot(diameterVector);
-    
-    guidata(handles.main, handles);
 end
 
 function calculateIntensity(hObject, ~)
@@ -404,39 +422,69 @@ end
 function calculateVelocity(hObject, ~)
 end
 
-function openFile(hObject, ~)
+function openFile_Callback(hObject, ~)
     handles = guidata(hObject);
     
+    handles = openFile(handles);
+    
+    guidata(handles.main, handles);
+end
+
+function handles = openFile(handlesIn)
+    handles = handlesIn;
+    
     if handles.savedCalculationFlag
-        dataStruct = handles.mpbus.scanData.savedCalculation;
+        loadedStruct = handles.mpbus.scanData.savedCalculation;
         filename = ''; 
     else
         [filename, pathname, filterIndex] = uigetfile({'*.mat'},'Open File');
         if filterIndex > 0
-            dataStruct = load( [ pathname filename] );
+            loadedStruct = load( [ pathname filename] );
         end
     end
     
     % the dataStruct is has been loaded from either a file or from the
     % MPBus -- where it was placed by calculatorWrapper()
     
+    %dataStruct = extractData(loadedStruct);
+    dataStruct = loadedStruct;  % for now until extractData is working
+    
     if isfield(dataStruct, 'data')
         handles.imageData = dataStruct.data;
         handles.imageWidth = size(handles.imageData, 2);
         handles.imageHeight = size(handles.imageData, 1);
+        handles.nFrames = size(handles.imageData, 3);
         handles.colormap = dataStruct.colormap;
         handles.diameter = dataStruct.diameter;
-
-        guidata(handles.main, handles);
         
-        resize_callback(handles.main, []);
+        %resize_callback(handles.main, []);
     else
         % the file selected was invalid
-        errorString = sprintf('The file "%s" does not contain image data.',...
+        errorString = sprintf('The file "%s" is not a saved calculation.',...
                                 filename);
         errordlg(errorString,'File Error');
     end
     
+end
+
+function dataStruct = extractData(loadedStruct)
+    % search through loadedStruct to find the correct fields
+    foundRoot = isfield(loadedStruct, 'data') & ...
+                isfield(loadedStruct, 'colormap') & ...
+                isfield(loadedStruct, 'diameter');
+            
+    if foundRoot
+        dataStruct = loadedStruct;
+    else
+        fieldnameList = fieldnames(loadedStruct);
+        
+        for fieldIndex = 1 : length(fieldnameList)
+            
+            
+            
+        end
+    end
+
 end
 
 function saveFile(hObject, ~)
@@ -461,22 +509,30 @@ function saveFile(hObject, ~)
     
     if strcmp(handles.filename, '') && ~saveAsVar
         handles.filename = getFilename();
-    else
-        data = handles.imageData;
-        colormap = handles.colormap;
-        diameter = handles.diameter;
+    end
         
-        if saveAsVar
-            varName = sprintf('calculation_%s', strrep(date, '-', '_'));
-            varValue = struct( 'data', data,...
-                               'colormap', colormap,...
-                               'diameter', diameter );
-                           
-            handles.mpbus.output(varName, varValue, 'Calculator'); 
+    varName = sprintf('calculation_%s', strrep(date, '-', '_'));
+    varValue = struct( 'data',  handles.imageData,...
+                           'colormap', handles.colormap,...
+                           'diameter', handles.diameter );
+
+    if saveAsVar     
+        handles.mpbus.output(varName, varValue, 'Calculator'); 
+    else
+        save(handles.filename, '-struct','varValue');
+        
+        % check to see that the file was saved successfully
+        if MPBus.verifyFile(handles.filename, '.mat')
+            title = 'Save Successful';
+            message = sprintf('The calculation was successfully saved as:\n\n"%s"', handles.filename);
+            msgbox( message, title ); 
         else
-            save(handles.filename, 'data', 'colormap', 'diameter');
+            title = 'Save Failed';
+            message = sprintf('There was a problem saving the file\n\n"%s".', handles.filename);
+            warndlg( message, title );
         end
     end
+    
 end
 
 function saveAsFile(hObject, ~)
@@ -606,7 +662,7 @@ function handles = createFigure(handlesIn, figureWidth, figureHeight)
         'Colormap',[0 0 0.5625;0 0 0.625;0 0 0.6875;0 0 0.75;0 0 0.8125;0 0 0.875;0 0 0.9375;0 0 1;0 0.0625 1;0 0.125 1;0 0.1875 1;0 0.25 1;0 0.3125 1;0 0.375 1;0 0.4375 1;0 0.5 1;0 0.5625 1;0 0.625 1;0 0.6875 1;0 0.75 1;0 0.8125 1;0 0.875 1;0 0.9375 1;0 1 1;0.0625 1 1;0.125 1 0.9375;0.1875 1 0.875;0.25 1 0.8125;0.3125 1 0.75;0.375 1 0.6875;0.4375 1 0.625;0.5 1 0.5625;0.5625 1 0.5;0.625 1 0.4375;0.6875 1 0.375;0.75 1 0.3125;0.8125 1 0.25;0.875 1 0.1875;0.9375 1 0.125;1 1 0.0625;1 1 0;1 0.9375 0;1 0.875 0;1 0.8125 0;1 0.75 0;1 0.6875 0;1 0.625 0;1 0.5625 0;1 0.5 0;1 0.4375 0;1 0.375 0;1 0.3125 0;1 0.25 0;1 0.1875 0;1 0.125 0;1 0.0625 0;1 0 0;0.9375 0 0;0.875 0 0;0.8125 0 0;0.75 0 0;0.6875 0 0;0.625 0 0;0.5625 0 0],...
         'IntegerHandle','off',...
         'MenuBar','none',...
-        'Name','Path Analyze -- Extract',...
+        'Name','Path Analyze Calculator',...
         'NumberTitle','off',...
         'Position',[300 400 figureWidth figureHeight],...
         'Tag','main',...
@@ -626,7 +682,7 @@ function handles = createMenu(handlesIn)
     handles.menu_open = uimenu(...
         'Parent',handles.menu_file,...
         'Accelerator','o',...
-        'Callback',@openFile,...
+        'Callback',@openFile_Callback,...
         'Label','Open...',...
         'Tag','menu_open' );
     
@@ -760,7 +816,6 @@ function handles = populateGUI(handlesIn, figureWidth, figureHeight)
     PIXEL_PADDING = 5;
     
     handles = createMenu(handlesIn);
-    
     
     %%% Control Panel
     panelWidth = 0.4;
