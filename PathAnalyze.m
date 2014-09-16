@@ -85,14 +85,7 @@ function refreshAll(handles)
     set(handles.menu_drawScanPath, 'Checked', 'off');
     
     if ~isempty(handles.mpbus.fullFileName)
-        % reset the regions before drawing anything
-        handles.regionPath = handles.mpbus.scanData.pathObjNum;
-        activateRegion(handles, 0);
-        handles.windowPeriod = 100;
-        handles.windowHorizontalLocations = ...
-                                    1:handles.windowPeriod:handles.nLines;
-                                
-        handles = createRegions(handles);
+
         
         drawTopView(handles);
 
@@ -101,6 +94,9 @@ function refreshAll(handles)
         
         drawScanRegion(handles.main, []);
     end
+    
+    % also redraw the calculator images
+    drawFrame(handles);
 end
 
 function drawTopView(handles)
@@ -482,22 +478,38 @@ function activateRegion(handles, regionIndex)
     controlHandles = findall(handles.panel_control,...
                                 'Tag', 'activeRegionControl');
     extractHandles = findall(handles.main, 'Tag', 'extract');
+    inactiveControlHandles = findall(handles.panel_control,...
+                                'Tag', 'activeRegionControl_inactive');
     allHandles = union(controlHandles, extractHandles);
     
     if regionIndex > 0
         handles.activeRegion = handles.region(regionIndex);
         handles.activeRegionIndex = regionIndex;
         set(allHandles, 'Enable','on');
+        set(inactiveControlHandles, 'Enable', 'inactive');
     else
         handles.activeRegion = [];
         handles.activeRegionIndex = 0;
         set(allHandles, 'Enable','off');
+        set(inactiveControlHandles, 'Enable', 'off');
     end
      
     guidata(handles.main, handles);
     displayWidthChange(handles);
     displayHeightChange(handles);
 
+end
+
+function handles = heightChange(handles, newPixelHeight)
+    handles.windowPeriod = newPixelHeight;
+    
+    handles.windowHorizontalLocations = ...
+                                    1:handles.windowPeriod:handles.nLines;
+                                
+    displayHeightChange(handles);
+end
+
+function handles = widthChange(handles, newPixelWidth)
 end
 
 function displayHeightChange(handles)
@@ -1013,6 +1025,16 @@ end
 
 function resetImage(hObject, ~)
     handles = guidata(hObject);
+    
+    % reset the regions before drawing anything
+    handles.regionPath = handles.mpbus.scanData.pathObjNum;
+    activateRegion(handles, 0);
+
+    handles = createRegions(handles);
+    
+    % and reset the window period
+    handles = heightChange(handles, 100);
+    
     refreshAll(handles);
 end
 
@@ -1038,9 +1060,11 @@ function calculateDiameter(hObject, ~)
 end
 
 function calculateIntensity(hObject, ~)
+    disp('calculate intensity');
 end
 
 function calculateVelocity(hObject, ~)
+    disp('calculate velocity');
 end
 
 function selectColormap(hObject, ~, colormap)
@@ -1127,6 +1151,48 @@ function resizeFigure(hObject, ~)
     refreshAll(handles);
     
 end
+
+function pixelHeightChange_Callback(hObject, ~)
+    handles = guidata(hObject);
+    
+    
+    inputString = get(hObject, 'String');
+    
+    newHeight_px = str2double(inputString);
+    if isnan(newHeight_px) || newHeight_px < handles.MINIMUM_WINDOW_PERIOD
+        % invalid input, reset the edit box to the current windowPeriod
+        set(hObject, 'String', sprintf('%d', handles.windowPeriod));
+        return;
+    end
+    
+    handles = heightChange(handles, newHeight_px);
+    
+    guidata(hObject, handles);
+    
+    refreshAll(handles);
+end
+
+function msHeightChange_Callback(hObject, ~)
+    handles = guidata(hObject);
+    
+    inputString = get(hObject, 'String');
+    
+    newHeight_ms = str2double(inputString);
+    if isnan(newHeight_ms) || newHeight_ms < handles.MINIMUM_WINDOW_PERIOD
+        % invalid input, reset the edit box to the current windowPeriod
+        set(hObject, 'String',...
+                sprintf('%.1f', handles.windowPeriod * handles.msPerLine));
+        return;
+    end
+    
+    newHeight_px = round( newHeight_ms / handles.msPerLine );
+
+    handles = heightChange(handles, newHeight_px);
+    
+    guidata(hObject, handles);
+    
+    refreshAll(handles);
+end
 %%% END CALLBACKS
 
 
@@ -1200,6 +1266,10 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
         nFramesToAdvance = 0;
     end
 
+    % if there isn't an extracted image, don't draw anything
+    if ~isfield(handles, 'exImageData') || isempty(handles.exImageData)
+        return;
+    end
   
     frameNumber = frameNumber + nFramesToAdvance;
     
@@ -1209,11 +1279,14 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     elseif frameNumber > handles.nFrames
         frameNumber = 1;
     end
+    
+    imageWidth = size(handles.exImageData, 2);
+    nFrames = size(handles.exImageData, 3);
 
-    if frameNumber == size(handles.exImageData, 3)
+    if frameNumber == nFrames
         % this is the last frame, return end of file (eof)
         eof = true;
-    elseif frameNumber > size(handles.exImageData, 3)
+    elseif frameNumber > nFrames
         % beyond the last frame
         frameNumber = 1;
         eof = true;
@@ -1221,20 +1294,21 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     else
         eof = false;
     end
-    
     set(handles.main, 'CurrentAxes', handles.axes_exImage);
     imagesc(handles.exImageData(:,:,frameNumber));
+    axis image
     axis off
     colormap(handles.colormap); 
     
     % also draw any diameter calculation results
-    if isfield(handles, 'diameter')
+    if isfield(handles, 'diameter') && ~isempty(handles.diameter);
         diameterStruct = handles.diameter(frameNumber);
         
         set(handles.main, 'CurrentAxes', handles.axes_results);
+        set(handles.axes_results, 'Visible', 'on');
         cla
         plot(diameterStruct.image);
-        set(gca,'xtick',[], 'ytick',[], 'xlim', [1, handles.imageWidth]);
+        set(gca,'xtick',[], 'ytick',[], 'xlim', [1, imageWidth]);
         hold on
         
         % draw the FWHM lines as well
@@ -1338,7 +1412,6 @@ function toggleCalculator(handles)
     calcHandles = findall(handles.panel_calculator, 'Tag', 'calculator');
     extractHandles = findall(handles.main, 'Tag', 'extract');
     if ~isfield(handles, 'exImageData') || isempty(handles.exImageData)
-       
         set(calcHandles, 'Visible', 'off');
         set(extractHandles, 'Visible', 'on');
     else
@@ -1357,7 +1430,9 @@ function clearCalculator(hObject, ~)
     cla(handles.axes_results);
     
     % then hide all the calculator controls
+    set(handles.axes_results, 'Visible', 'off');
     handles.exImageData = [];
+    handles.diameter = [];
     toggleCalculator(handles);
     
     guidata(hObject, handles);
@@ -1365,6 +1440,27 @@ end
 
 function saveCalculator(hObject, ~)
     disp('save is not functional yet');
+end
+
+function popupCalculate(hObject, ~)
+    handles = guidata(hObject);
+    
+    selectedIndex = get(hObject, 'Value');
+    items = get(hObject, 'String');
+    
+    selectedItem = items{selectedIndex};
+    
+    s = handles.calculateOptions;
+    switch selectedItem
+        case s.diameter
+            calculateDiameter(hObject, []);
+        case s.velocity
+            calculateVelocity(hObject, []);
+        case s.intensity
+            calculateIntensity(hObject, []);
+        otherwise
+            return;
+    end
 end
 
 %% GUI Creation Functions
@@ -1742,7 +1838,7 @@ function handles = populateControlPanel(handles)
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
         'Position', [ column1_x, rowY(2) + 4 * padding_y, editWidth, editHeight ],...
-        'Tag','activeRegionControl',...
+        'Tag','activeRegionControl_inactive',...
         'String', '',...
         'Enable','off' );
 
@@ -1761,7 +1857,7 @@ function handles = populateControlPanel(handles)
         'Units', 'normalized',...
         'BackgroundColor', 'white',...
         'Position', [ column2_x, rowY(2) + 4 * padding_y, editWidth, editHeight ],...
-        'Tag','activeRegionControl',...
+        'Tag','activeRegionControl_inactive',...
         'String', '',...
         'Enable','off' );
 
@@ -1793,6 +1889,7 @@ function handles = populateControlPanel(handles)
         'BackgroundColor', 'white',...
         'Position', [ column1_x, rowY(5) + 4 * padding_y, editWidth, editHeight ],...
         'Tag','activeRegionControl',...
+        'Callback', @pixelHeightChange_Callback,...
         'String', '',...
         'Enable','off' );
 
@@ -1812,6 +1909,7 @@ function handles = populateControlPanel(handles)
         'BackgroundColor', 'white',...
         'Position', [ column2_x, rowY(5) + 4 * padding_y, editWidth, editHeight ],...
         'Tag','activeRegionControl',...
+        'Callback', @msHeightChange_Callback,...
         'String', '',...
         'Enable','off' );
 
@@ -1837,9 +1935,23 @@ function handles = populateCalculationPanel(handles)
     
    handles.DEFAULT_FPS = 12;
    
-   %testing
+    function htmlString = makeHTML(stringIn)
+        htmlString = sprintf('<HTML><b>&nbsp;&nbsp;&nbsp;%s</b></HTML>', stringIn);
+    end
+   
+   % the calculateOptions struct is used to populate the popupmenu that
+   % users can use to run a calculation
+   handles.calculateOptions = struct(...
+       'head', 'Calculate...', ...
+       'diameter', makeHTML('Diameter'),...
+       'velocity', makeHTML('Velocity'),...
+       'intensity', makeHTML('Intensity') );
+                                
+   
+   %NOTE: testing
    handles.exImageWidth = 40;
    handles.exImageHeight = 100;
+   % end testing
    
    % working width and height are the dimensions of the area that can be
    % used by the calculation graphics objects
@@ -1856,7 +1968,11 @@ function handles = populateCalculationPanel(handles)
     labelWidth = 2 * editWidth;
     labelX = 0;
     editX = labelX + labelWidth + 2 * handles.PADDING / workingWidth;
-    yLocations = 1 - (1:8) * editHeight;
+    yLocations = 1 - (1:10) * editHeight;
+    
+    buttonWidth = labelWidth / 2 + editWidth;
+    buttonHeight = 1.5 * editHeight;
+    buttonX = (labelX + editX) / 2;
     
     handles.panel_calcControl = uipanel(...
     'Parent',handles.panel_calculator,...
@@ -1888,7 +2004,7 @@ function handles = populateCalculationPanel(handles)
         'Units', 'normalized',...
         'HorizontalAlignment', 'right',...
         'Position', [ labelX yLocations(3) labelWidth editHeight ],...
-        'String', 'Frames Per Second',...
+        'String', 'FPS',...
         'Tag', 'calculator' );
 
     handles.edit_fps = uicontrol(...
@@ -1900,23 +2016,35 @@ function handles = populateCalculationPanel(handles)
         'Position', [editX yLocations(3) editWidth editHeight],...
         'Tag', 'calculator' );
     
-    handles.button_clear = uicontrol(...
-        'Parent', handles.panel_calcControl,...
-        'Style', 'pushbutton',...
-        'Units', 'normalized',...
-        'String', 'Clear',...
-        'Callback', @clearCalculator,...
-        'Position', [ editX yLocations(5) editWidth editHeight ],...
-        'Tag', 'calculator' );
-        
-
     handles.button_save = uicontrol(...
         'Parent', handles.panel_calcControl,...
         'Style', 'pushbutton',...
         'Units', 'normalized',...
         'String', 'Save',...
         'Callback', @saveCalculator,...
-        'Position', [ editX yLocations(6) editWidth editHeight ],...
+        'Position', [ buttonX yLocations(5) buttonWidth buttonHeight ],...
+        'Tag', 'calculator' );
+    
+    handles.button_clear = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Clear',...
+        'Callback', @clearCalculator,...
+        'Position', [ buttonX yLocations(7) buttonWidth buttonHeight ],...
+        'Tag', 'calculator' );
+        
+    popupX = (labelX + editX) / 2;
+    popupWidth = labelWidth / 2 + editWidth;
+    s = handles.calculateOptions;
+    handles.popup_calculate = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'BackgroundColor', 'white',...
+        'Style', 'popupmenu',...
+        'Units', 'normalized',...
+        'Callback', @popupCalculate,...
+        'String', {s.head, s.diameter, s.velocity, s.intensity},...
+        'Position', [ popupX, yLocations(9), popupWidth, editHeight ],...
         'Tag', 'calculator' );
   
     %{
