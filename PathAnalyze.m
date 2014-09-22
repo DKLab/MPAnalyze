@@ -1041,30 +1041,71 @@ end
 function calculateDiameter(hObject, ~)
     handles = guidata(hObject);
     
+    handles = clearResults(handles);
+    
     if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
-        results = diameter(handles.exImageData);
+        [ results, diameterVector ] = diameter(handles.exImageData);
         
         handles.diameter = results;
         % make the results visible
         set(handles.axes_results, 'Visible', 'on');
         drawFrame(handles);
 
-        %TODO: outputDiameter summarizes the diameter calculation with a
-        %plot and it's corresponding vector which gets sent to the current
-        %MPWorkspace (the Base Workspace unless Path Analyze was called
-        %from MPAnalyze)
-        %outputDiameter(handles, diameterVector, fitToGaussianFlag)
+        outputDiameter(handles, diameterVector);
     
         guidata(handles.main, handles);
     end
 end
 
+function outputDiameter(handles, diameterVector)
+
+        [ ~, filename, ~ ] = fileparts( handles.mpbus.fullFileName );
+        varname = sprintf('Diameter_%s', filename); 
+        handles.mpbus.output(varname, diameterVector);
+        
+        figure; plot(diameterVector);
+end
+
 function calculateIntensity(hObject, ~)
-    disp('calculate intensity');
+    % simply get the mean intensity (value) for all frames of the extracted image
+    handles = guidata(hObject);
+    
+    handles = clearResults(handles);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        intensity = mean( mean(handles.exImageData, 1), 3);
+        
+        % output the results right away (nothing to display in the results
+        % axes)
+        outputIntensity(handles, intensity);
+        
+        figure, plot(intensity);
+    end
+    
+    guidata(hObject, handles);
+end
+
+function outputIntensity(handles, intensity)
+
+        [~,filename,~] = fileparts(handles.mpbus.fullFileName);
+            
+        varname = sprintf('Intensity_%s', filename); 
+        handles.mpbus.output(varname, intensity);
 end
 
 function calculateVelocity(hObject, ~)
-    disp('calculate velocity');
+    % get the Radon transform for each frame of the extracted image
+    
+    handles = guidata(hObject);
+    handles = clearResults(handles);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        handles.velocity = velocity(handles.exImageData);
+    end
+
+    guidata(hObject, handles);
+    
+    drawFrame(handles);
 end
 
 function selectColormap(hObject, ~, colormap)
@@ -1098,7 +1139,7 @@ function mouseUp(hObject, ~)
 end
 
 function exportActiveRegion(hObject, ~)
-    % export the active region
+    % export the active region (extract)
     handles = guidata(hObject);
     
     if ~isempty(handles.activeRegion)
@@ -1198,7 +1239,6 @@ end
 
 %% Image Extraction/Calculation Functions 
 function handles = readFrames(handles, domain, windowPeriod)
-
     % read in image data
     frameWidth = domain(2) - domain(1) + 1;
     frameHeight = windowPeriod;
@@ -1208,7 +1248,7 @@ function handles = readFrames(handles, domain, windowPeriod)
                         * handles.IMAGE_SCALE_FACTOR;
     handles.exImageHeight = windowPeriod * handles.IMAGE_SCALE_FACTOR;
     
-    % TESTING -- just loading 100 frames for now
+    % TESTING -- just loading a few frames for now
     %nFrames = 200;
     % END TESTING
     
@@ -1300,8 +1340,8 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     axis off
     colormap(handles.colormap); 
     
-    % also draw any diameter calculation results
-    if isfield(handles, 'diameter') && ~isempty(handles.diameter);
+    % also draw any calculation results
+    if isfield(handles, 'diameter') && ~isempty(handles.diameter)
         diameterStruct = handles.diameter(frameNumber);
         
         set(handles.main, 'CurrentAxes', handles.axes_results);
@@ -1332,7 +1372,44 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
 
             plot(gaussX, gaussY, 'r');
         end
+    elseif isfield(handles, 'velocity') && ~isempty(handles.velocity)
         
+        % draw an arrow on the image at the angle determined by the Radon
+        % transform
+        theta = handles.velocity(frameNumber).angle;
+        domain = xlim;
+        range = ylim;
+        width = domain(2) - domain(1);
+        height = range(2) - range(1);
+        
+        lineLength = width/2;
+        
+        x_start = width/2;
+        y_start = height/2;
+        y_end = y_start - lineLength * sin(theta);
+        x_end = x_start + lineLength * cos(theta);
+        
+        line([x_start, x_end], [y_start, y_end], ...
+                'Color', 'cyan',...
+                'LineWidth', 4);
+        
+        angleString = sprintf('%0.3f \\pi', theta/pi);
+        x_text = width/4;
+        y_text = height * 3/4;
+        text('Position', [x_text, y_text],...
+            'BackgroundColor', 'white',... 
+            'String', angleString);
+      
+        % display velocity results
+        set(handles.main, 'CurrentAxes', handles.axes_results);
+        set(handles.axes_results, 'Visible', 'on');
+        cla
+        
+        if length(handles.velocity) >= frameNumber
+            imagesc( transpose(handles.velocity(frameNumber).transform) );
+            axis image
+            colormap(handles.colormap);
+        end
     end
     
     set(handles.edit_frameNumber, 'String', frameNumber);
@@ -1423,6 +1500,9 @@ function toggleCalculator(handles)
 end
 
 function clearCalculator(hObject, ~)
+    % used to remove the extracted image and return the calculator panel to
+    % its opening state -- just a button in the middle that lets users
+    % extract an image from the scan data
     handles = guidata(hObject);
     
     % clear both calculator axes
@@ -1430,12 +1510,23 @@ function clearCalculator(hObject, ~)
     cla(handles.axes_results);
     
     % then hide all the calculator controls
+    set(handles.popup_calculate, 'Value', 1);
     set(handles.axes_results, 'Visible', 'off');
     handles.exImageData = [];
     handles.diameter = [];
+    handles.velocity = [];
     toggleCalculator(handles);
     
     guidata(hObject, handles);
+end
+
+function handles = clearResults(handles)
+% remove any diameter, intensity, or velocity calculations (always called
+% before a new calculation begins)
+
+    handles.diameter = [];
+    handles.intensity = [];
+    handles.velocity = [];
 end
 
 function saveCalculator(hObject, ~)
@@ -1463,6 +1554,76 @@ function popupCalculate(hObject, ~)
     end
 end
 
+function testExtract(hObject, ~)
+    % used to test the Calculator panel without having to use actual data
+    handles = guidata(hObject);
+    clearCalculator(hObject, []);
+    
+    THICKNESS = 5;
+    width = 50;
+    height = 100;
+    nFrames = 50;
+
+    function frame = makeFrame(theta)
+        % dy/dx = tan(theta)
+        % let dy = 1, then dx = 1 / tan(theta)
+        % basically, step down through the matrix and on each horizontal line,
+        % draw a dashed line, then shift this dashed line by dx for the next
+        % horizontal position.
+        dx = 1 / tan(theta);    % this is the amount each line gets shifted
+
+        dashedLine = zeros( width, 1 );
+        dashedLine( : ) = 0.2;
+        pixelIndex = 1;
+        while pixelIndex <= (width - THICKNESS)
+            dashedLine( pixelIndex : (pixelIndex - 1 + THICKNESS) ) = 1;
+            pixelIndex = pixelIndex + ( 2 * THICKNESS );
+        end
+
+        frame = zeros(width, height, 'int16' );
+        for lineIndex = 1 : height
+            shiftAmount = round( dx * lineIndex );
+            frame( :, lineIndex ) = circshift( dashedLine, shiftAmount );
+        end
+
+        % reorient the frame so that the lines are at an angle relative to the
+        % positive horizontal (x) axis.
+        frame = flipud(transpose(frame));
+    end
+
+    % the starting angle is random, after that the angle is incremented by
+    % a small amount on each frame
+    
+    angle = rand * 2 * pi;
+    angle = pi / 2 + 0.05;  % TESTING
+    fprintf('Test Image created with lines at an intial angle of %.1f degrees.\n', angle * 180 / pi );
+    
+    
+    fullImage = zeros(height, width, nFrames);
+    for frameIndex = 1 : nFrames
+        cframe = makeFrame(angle);
+        fullImage(:, :, frameIndex) = cframe;
+        
+        % continuously vary the angle
+        angle = angle + 0.01;
+    end
+    
+    handles.exImageData = fullImage;
+    handles.exImageWidth = width;
+    handles.exImageHeight = height;
+    handles.nFrames = nFrames;
+    guidata(hObject, handles);
+    
+    % show the calculator panel
+    toggleCalculator(handles);
+     
+    guidata(handles.main, handles);
+    
+    
+    set(handles.main, 'CurrentAxes', handles.axes_exImage);
+    drawFrame(handles, 0, 1);  
+
+end
 %% GUI Creation Functions
 
 function handles = createLineSlider(handles, range)
@@ -1797,6 +1958,17 @@ handles.menu_velocity = uimenu(...
     'Callback',@calculateVelocity,...
     'Label','Velocity',...
     'Tag','menu_velocity' );
+
+handles.menu_debug = uimenu(...
+    'Parent',handles.main,...
+    'Label','Debug',...
+    'Tag','menu_debug' );
+
+handles.menu_testExtract = uimenu(...
+    'Parent',handles.menu_debug,...
+    'Label','Test Image Extraction',...
+    'Callback', @testExtract,...
+    'Tag','menu_debug' );
 
 %%%
 end

@@ -1,7 +1,8 @@
-function results = diameter( imageData )
+function [ frameResults, diameterVector ] = diameter( imageData )
 %DIAMETER Find the Full Width Half Maximum of extracted scan data
 %(imageData) then return the calculation in the results struct.
-%   
+%   return a struct for every frame (frameResults) and a vector that has a
+%   datapoint for every frame (diameterVector)
 
     SMOOTHING = 1;
     FWHM_TO_DIAMETER = 1;   % will be a lookup table in the future
@@ -29,7 +30,7 @@ function results = diameter( imageData )
             return;
     end
     
-    results = struct(...
+    frameResults = struct(...
         'image', [],...
         'leftWidthPoint', 0,...
         'rightWidthPoint', 0,...
@@ -59,20 +60,20 @@ function results = diameter( imageData )
         widthDifference = (FWHM_TO_DIAMETER - 1) * fwhm;
         diameterVector(frameIndex) = FWHM_TO_DIAMETER * fwhm; 
         
-        results(frameIndex).image = dataVector;
-        results(frameIndex).fwhm = fwhm;
-        results(frameIndex).coefficients = coefficients;
+        frameResults(frameIndex).image = dataVector;
+        frameResults(frameIndex).fwhm = fwhm;
+        frameResults(frameIndex).coefficients = coefficients;
 
-        results(frameIndex).leftWidthPoint = ...
+        frameResults(frameIndex).leftWidthPoint = ...
             floor(leftWidthPoint - widthDifference / 2 );
         
-        results(frameIndex).rightWidthPoint = ...
+        frameResults(frameIndex).rightWidthPoint = ...
             ceil(rightWidthPoint + widthDifference / 2 );
         
-        results(frameIndex).centerPoint = ...
+        frameResults(frameIndex).centerPoint = ...
             [ (leftWidthPoint + rightWidthPoint)/2, halfMax ]; 
         
-         % also, calculate how much time is remaining
+        % also, calculate how much time is remaining
         currentTime = clock;
         elapsedTime = etime(currentTime, startTime);
         secondsPerFrame = elapsedTime / frameIndex;
