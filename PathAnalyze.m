@@ -12,6 +12,10 @@ handles.SLIDER_WIDTH = 20;
 
 handles.MINIMUM_WINDOW_PERIOD = 15;
 handles.IMAGE_SCALE_FACTOR = 1;     % used by calculator
+handles.OUTLIER_SIGMA = 3;   % the number of standard deviations that signifies an outlier
+% REJECT_ANGLE_RANGE is in units of pi radians and indicates the range of
+% angles to reject from Radon transforms. ( for example, 0.5 means pi/2 radians ) 
+handles.REJECT_ANGLE_RANGE = [0.40, 0.60];
 handles.isLoaded = false;
 handles.imageStack = [];
 
@@ -1055,15 +1059,23 @@ function calculateDiameter(hObject, ~)
     
         guidata(handles.main, handles);
     end
+    
+    % enable the Reject Frames button
+    set(handles.button_reject, 'Enable', 'on');
 end
 
 function outputDiameter(handles, diameterVector)
 
+    if ~isempty( handles.mpbus.fullFileName )
         [ ~, filename, ~ ] = fileparts( handles.mpbus.fullFileName );
-        varname = sprintf('Diameter_%s', filename); 
-        handles.mpbus.output(varname, diameterVector);
-        
-        figure; plot(diameterVector);
+    else
+        filename = 'output';
+    end
+    
+    varname = sprintf('Diameter_%s', filename); 
+    handles.mpbus.output(varname, diameterVector);
+
+    figure; plot(diameterVector);
 end
 
 function calculateIntensity(hObject, ~)
@@ -1106,6 +1118,8 @@ function calculateVelocity(hObject, ~)
     guidata(hObject, handles);
     
     drawFrame(handles);
+    
+    set(handles.button_reject, 'Enable', 'on');
 end
 
 function selectColormap(hObject, ~, colormap)
@@ -1238,8 +1252,9 @@ end
 
 
 %% Image Extraction/Calculation Functions 
-function handles = readFrames(handles, domain, windowPeriod)
+function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
     % read in image data
+
     frameWidth = domain(2) - domain(1) + 1;
     frameHeight = windowPeriod;
     nFrames = floor( handles.mpbus.ysize * handles.mpbus.numFrames / frameHeight );
@@ -1248,9 +1263,11 @@ function handles = readFrames(handles, domain, windowPeriod)
                         * handles.IMAGE_SCALE_FACTOR;
     handles.exImageHeight = windowPeriod * handles.IMAGE_SCALE_FACTOR;
     
-    % TESTING -- just loading a few frames for now
-    %nFrames = 200;
-    % END TESTING
+    % forceNFrames is used for debugging purposes to only extract a set
+    % amount of frames
+    if exist('forceNFrames', 'var')
+        nFrames = min( [forceNFrames, nFrames] );
+    end
     
     % initialize a waitbar
     waitbarHandle = waitbar(0, 'Time Remaining: ',...
@@ -1259,7 +1276,39 @@ function handles = readFrames(handles, domain, windowPeriod)
     
     %exportFile = matfile(EXPORT_FILE_NAME, 'Writable', true);
     %exportFile.data = zeros(frameHeight, frameWidth, nFrames, 'int16' );
-    handles.exImageData = zeros(frameHeight, frameWidth, nFrames, 'int16' );
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        % there is already image data loaded, just resize the exImageData
+        % matrix instead of allocating a new one (this is done to prevent
+        % Out Of Memory errors)
+        allocatedHeight = size(handles.exImageData, 1);
+        allocatedWidth = size(handles.exImageData, 2);
+        dHeight = frameHeight - allocatedHeight;
+        dWidth = frameWidth - allocatedWidth;
+        
+        adjustedHeight = allocatedHeight + dHeight;
+        adjustedWidth = allocatedWidth + dWidth;
+        % now resize the matrix
+        if dHeight < 0
+            % the height needs to be smaller
+            handles.exImageData( adjustedHeight + 1 : allocatedHeight, :, : ) = [];
+        else
+            % the height needs to be larger
+            handles.exImageData( allocatedHeight : adjustedHeight, :, : ) = 0; 
+        end
+
+        if dWidth < 0
+            % the width needs to be smaller
+            handles.exImageData( :, adjustedWidth + 1 : allocatedWidth, : ) = [];
+        else
+            % the width needs to be larger
+            handles.exImageData( :, allocatedWidth : adjustedWidth, : ) = 0; 
+        end
+
+    else
+        % no image data yet, allocate a new matrix
+        handles.exImageData = zeros(frameHeight, frameWidth, nFrames, 'int16' );
+    end
+    
     handles.nFrames = nFrames;
     
     startTime = clock;
@@ -1339,7 +1388,7 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
     axis image
     axis off
     colormap(handles.colormap); 
-    
+
     % also draw any calculation results
     if isfield(handles, 'diameter') && ~isempty(handles.diameter)
         diameterStruct = handles.diameter(frameNumber);
@@ -1351,63 +1400,95 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
         set(gca,'xtick',[], 'ytick',[], 'xlim', [1, imageWidth]);
         hold on
         
-        % draw the FWHM lines as well
-        X = [ diameterStruct.leftWidthPoint, ...
-            diameterStruct.rightWidthPoint ];
-        
-        Y = ylim;
-        
-        line([X(1), X(1)], Y, 'Linestyle', ':', 'Color', 'black');
-        line([X(2), X(2)], Y, 'Linestyle', ':', 'Color', 'black');
-        
-        % and the Gaussian fit
-        coefficients = diameterStruct.coefficients;
-        if ~isempty(coefficients)
-            a = coefficients(1);
-            b = coefficients(2);
-            c = coefficients(3);
+        % draw the FWHM lines as well (unless this datapoint is rejected)
+        if isnan(diameterStruct.fwhm)
+            % rejected data -- cross out the results axes
+            X = xlim;
+            Y = ylim;
+            
+            line([X(1), X(2)], [Y(1), Y(2)], 'Linestyle', '-', 'Color', 'black');
+            line([X(1), X(2)], [Y(2), Y(1)], 'Linestyle', '-', 'Color', 'black');
+            
+        else
+            % good data
+            X = [ diameterStruct.leftWidthPoint, ...
+                diameterStruct.rightWidthPoint ];
 
-            gaussX = 1 : length(diameterStruct.image);
-            gaussY = a * exp( -1/2 .* ( (gaussX - b) ./ c ).^2 );
+            Y = ylim;
 
-            plot(gaussX, gaussY, 'r');
+            line([X(1), X(1)], Y, 'Linestyle', ':', 'Color', 'black');
+            line([X(2), X(2)], Y, 'Linestyle', ':', 'Color', 'black');
+
+            % and the Gaussian fit
+            coefficients = diameterStruct.coefficients;
+            if ~isempty(coefficients)
+                a = coefficients(1);
+                b = coefficients(2);
+                c = coefficients(3);
+
+                gaussX = 1 : length(diameterStruct.image);
+                gaussY = a * exp( -1/2 .* ( (gaussX - b) ./ c ).^2 );
+
+                plot(gaussX, gaussY, 'r');
+            end
         end
     elseif isfield(handles, 'velocity') && ~isempty(handles.velocity)
         
-        % draw an arrow on the image at the angle determined by the Radon
+        % draw a line on the image at the angle determined by the Radon
         % transform
         theta = handles.velocity(frameNumber).angle;
         domain = xlim;
         range = ylim;
         width = domain(2) - domain(1);
         height = range(2) - range(1);
-        
-        lineLength = width/2;
-        
-        x_start = width/2;
-        y_start = height/2;
-        y_end = y_start - lineLength * sin(theta);
-        x_end = x_start + lineLength * cos(theta);
-        
-        line([x_start, x_end], [y_start, y_end], ...
-                'Color', 'cyan',...
-                'LineWidth', 4);
-        
-        angleString = sprintf('%0.3f \\pi', theta/pi);
-        x_text = width/4;
-        y_text = height * 3/4;
-        text('Position', [x_text, y_text],...
-            'BackgroundColor', 'white',... 
-            'String', angleString);
+
+        if isnan(theta)
+            % rejected datapoint -- cross out the image axes
+            X = domain;
+            Y = range;
+            line([X(1), X(2)], [Y(1), Y(2)], ...
+                'Linestyle', '-', 'Color', 'black', 'LineWidth', 4);
+            line([X(1), X(2)], [Y(2), Y(1)], ...
+                'Linestyle', '-', 'Color', 'black', 'LineWidth', 4);
+            
+            x_text = width/4;
+            y_text = height * 3/4;
+            text('Position', [x_text, y_text],...
+                'BackgroundColor', 'white',... 
+                'String', '-----------');
+            
+        else
+            % good data
+            lineLength = width/2;
+            x_start = width/2;
+            y_start = height/2;
+            y_end = y_start - lineLength * sin(theta);
+            x_end = x_start + lineLength * cos(theta);
+
+            line([x_start, x_end], [y_start, y_end], ...
+                    'Color', 'cyan',...
+                    'LineWidth', 4);
+
+            angleString = sprintf('%0.3f \\pi', theta/pi);
+            x_text = width/4;
+            y_text = height * 3/4;
+            text('Position', [x_text, y_text],...
+                'BackgroundColor', 'white',... 
+                'String', angleString);
+        end
       
         % display velocity results
         set(handles.main, 'CurrentAxes', handles.axes_results);
         set(handles.axes_results, 'Visible', 'on');
-        cla
         
+        cla
+         
         if length(handles.velocity) >= frameNumber
             imagesc( transpose(handles.velocity(frameNumber).transform) );
-            axis image
+            set(handles.axes_results, ...
+                'YTick', [1, 45, 90, 135, 179],...
+                'YTickLabel', {'0', '1/4 pi', '1/2 pi', '3/4 pi', 'pi'},...
+                'XTick', []);
             colormap(handles.colormap);
         end
     end
@@ -1483,12 +1564,16 @@ function last_callback(hObject, ~)
     drawFrame(handles, 0, handles.nFrames);
 end
 
-function toggleCalculator(handles)
+function toggleCalculator(handles, forceClear)
 
+    if ~exist('forceClear', 'var')
+        forceClear = false;
+    end
+    
     % if there is no extracted image data, hide all the calculator controls
     calcHandles = findall(handles.panel_calculator, 'Tag', 'calculator');
     extractHandles = findall(handles.main, 'Tag', 'extract');
-    if ~isfield(handles, 'exImageData') || isempty(handles.exImageData)
+    if forceClear || ~isfield(handles, 'exImageData') || isempty(handles.exImageData)
         set(calcHandles, 'Visible', 'off');
         set(extractHandles, 'Visible', 'on');
     else
@@ -1512,10 +1597,11 @@ function clearCalculator(hObject, ~)
     % then hide all the calculator controls
     set(handles.popup_calculate, 'Value', 1);
     set(handles.axes_results, 'Visible', 'off');
-    handles.exImageData = [];
+    set(handles.button_reject, 'Enable', 'off');
     handles.diameter = [];
     handles.velocity = [];
-    toggleCalculator(handles);
+    toggleCalculator(handles, true);
+    
     
     guidata(hObject, handles);
 end
@@ -1554,7 +1640,7 @@ function popupCalculate(hObject, ~)
     end
 end
 
-function testExtract(hObject, ~)
+function loadSample(hObject, ~)
     % used to test the Calculator panel without having to use actual data
     handles = guidata(hObject);
     clearCalculator(hObject, []);
@@ -1624,6 +1710,117 @@ function testExtract(hObject, ~)
     drawFrame(handles, 0, 1);  
 
 end
+
+function smallExportActiveRegion(hObject, ~)
+    % export the active region (extract)
+    handles = guidata(hObject);
+    SAMPLE_SIZE = 100;
+    
+    if ~isempty(handles.activeRegion)
+
+        domain = [ handles.activeRegion.leftBoundary,...
+                    handles.activeRegion.rightBoundary ];
+
+        handles = readFrames(handles, domain, handles.windowPeriod, SAMPLE_SIZE); 
+
+        toggleCalculator(handles);
+        guidata(handles.main, handles);
+    end    
+end
+
+function rejectFrames(hObject, ~)
+    handles = guidata(hObject);
+    % activates the rejection rules --
+    % for velocity: reject angles at pi/2
+    % for diameter: reject outliers ( > 3 standard deviations )
+    % rejections are handled by replacing the relevant value with NaN
+    % NaNs can then be skipped or interpolated
+    
+    questionString = [ 'Do you want to interpolate over the rejected frames? ' ...
+                        'WARNING: There will be no way to tell which frames '...
+                        'were rejected if you choose to interpolate.' ];
+    answer = questdlg(questionString, 'Reject Frames');
+    
+    switch answer
+        case 'Yes'
+            doInterpolate = true;
+        case 'No'
+            doInterpolate = false;
+        otherwise
+            doInterpolate = false;
+    end
+    
+    nRejected = 0;
+    if isfield(handles, 'diameter') && ~isempty(handles.diameter)
+        
+        diameterVector = [ handles.diameter.fwhm ];
+        meanDiameter = mean( diameterVector );
+        threshold = std( diameterVector ) * handles.OUTLIER_SIGMA;
+        nFrames = length(diameterVector);
+        
+        for frameIndex = 1 : nFrames
+            if diameterVector(frameIndex) >= meanDiameter + threshold || ...
+                diameterVector(frameIndex) <= meanDiameter - threshold
+                % this is an outlier
+                handles.diameter(frameIndex).fwhm = NaN;
+                nRejected = nRejected + 1;
+            end
+        end
+        
+        %TODO: diameter interpolation -- need to handle left and right
+        %boundary somehow (interpolate these as well?)
+
+    elseif isfield(handles, 'velocity') && ~isempty(handles.velocity)
+    
+        angleVector = [ handles.velocity.angle ];
+        minAngle = handles.REJECT_ANGLE_RANGE(1) * pi;
+        maxAngle = handles.REJECT_ANGLE_RANGE(2) * pi;
+        
+        nFrames = length(angleVector);
+        for frameIndex = 1 : nFrames
+            if angleVector(frameIndex) >= minAngle && ...
+                angleVector(frameIndex) <= maxAngle
+                
+                % reject this datapoint
+                handles.velocity(frameIndex).angle = NaN;
+                nRejected = nRejected + 1;
+            end
+        end
+        
+        % now interpolate over the rejected values
+        if doInterpolate
+            rejected = isnan(angleVector);
+            t = 1 : length(angleVector);
+            angleVector(rejected) = interp1( ...
+                    t(~rejected), angleVector(~rejected), t(rejected) );
+                
+            % handle the boundaries of the vector (the above interpolation
+            % will not work on the first and last element)
+            if isnan(angleVector(end))
+                angleVector(end) = angleVector(nFrames - 1);
+            end
+            if isnan(angleVector(1))
+                angleVector(1) = angleVector(2);
+            end
+            % can't figure out how to vectorize an assignment to a struct
+            % array, using a for loop for now
+            for frameIndex = 1 : nFrames
+                handles.velocity(frameIndex).angle = angleVector(frameIndex);
+            end
+        end
+    end
+    
+    if nRejected == 1
+        messageString = sprintf('1 frame out of %d rejected.', nFrames);
+    else
+        messageString = sprintf('%d frames out of %d rejected', nRejected, nFrames);
+    end
+    
+    helpdlg(messageString, 'Finished Rejecting Frames');
+    
+    guidata(hObject, handles);
+end
+
 %% GUI Creation Functions
 
 function handles = createLineSlider(handles, range)
@@ -1964,12 +2161,17 @@ handles.menu_debug = uimenu(...
     'Label','Debug',...
     'Tag','menu_debug' );
 
-handles.menu_testExtract = uimenu(...
+handles.menu_loadSample = uimenu(...
     'Parent',handles.menu_debug,...
-    'Label','Test Image Extraction',...
-    'Callback', @testExtract,...
+    'Label','Load Sample Data',...
+    'Callback', @loadSample,...
     'Tag','menu_debug' );
 
+handles.menu_smallExtract = uimenu(...
+    'Parent',handles.menu_debug,...
+    'Label','Extract first 100 frames',...
+    'Callback', @smallExportActiveRegion,...
+    'Tag','menu_debug' );
 %%%
 end
 
@@ -2140,7 +2342,7 @@ function handles = populateCalculationPanel(handles)
     labelWidth = 2 * editWidth;
     labelX = 0;
     editX = labelX + labelWidth + 2 * handles.PADDING / workingWidth;
-    yLocations = 1 - (1:10) * editHeight;
+    yLocations = 1 - (1:12) * editHeight;
     
     buttonWidth = labelWidth / 2 + editWidth;
     buttonHeight = 1.5 * editHeight;
@@ -2218,6 +2420,16 @@ function handles = populateCalculationPanel(handles)
         'String', {s.head, s.diameter, s.velocity, s.intensity},...
         'Position', [ popupX, yLocations(9), popupWidth, editHeight ],...
         'Tag', 'calculator' );
+    
+    handles.button_reject = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Reject Frames...',...
+        'Callback', @rejectFrames,...
+        'Position', [ buttonX yLocations(12) buttonWidth buttonHeight ],...
+        'Tag', 'calculator', ...
+        'Enable', 'off' );
   
     %{
     buttonWidth = handles.BUTTON_WIDTH / panelWidth;
@@ -2271,7 +2483,7 @@ function handles = populateCalculationPanel(handles)
     handles.axes_results = axes(...
         'Parent',handles.panel_calculator,...
         'Units','pixels',...
-        'Position',[(axesX + axesWidth + 30) axesY axesWidth axesHeight],...
+        'Position',[(axesX + axesWidth + 50) axesY axesWidth axesHeight],...
         'XTick', [],...
         'YTick', [],...
         'Visible', 'off' );
