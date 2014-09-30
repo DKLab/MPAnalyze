@@ -1,4 +1,4 @@
-function [ frameResults, diameterVector ] = diameter( imageData )
+function frameResults = diameter( imageData )
 %DIAMETER Find the Full Width Half Maximum of extracted scan data
 %(imageData) then return the calculation in the results struct.
 %   return a struct for every frame (frameResults) and a vector that has a

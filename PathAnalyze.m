@@ -88,8 +88,17 @@ function refreshAll(handles)
     set(handles.menu_drawScanRegion, 'Checked', 'off');
     set(handles.menu_drawScanPath, 'Checked', 'off');
     
+    channelButtons = findall(handles.panel_channels, 'Tag', 'channelButton');
+    set(channelButtons, 'Value', 0, 'Enable', 'off');
+    
     if ~isempty(handles.mpbus.fullFileName)
 
+        % for each image channel, enable the corresponding channel button
+        % and toggle the active channel button
+        imageChannels = handles.mpbus.channelList;
+        activeChannel = handles.mpbus.activeChannel;
+        set(handles.button_channel(imageChannels), 'Enable', 'on');
+        set(handles.button_channel(activeChannel), 'Value', 1);
         
         drawTopView(handles);
 
@@ -1042,85 +1051,6 @@ function resetImage(hObject, ~)
     refreshAll(handles);
 end
 
-function calculateDiameter(hObject, ~)
-    handles = guidata(hObject);
-    
-    handles = clearResults(handles);
-    
-    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
-        [ results, diameterVector ] = diameter(handles.exImageData);
-        
-        handles.diameter = results;
-        % make the results visible
-        set(handles.axes_results, 'Visible', 'on');
-        drawFrame(handles);
-
-        outputDiameter(handles, diameterVector);
-    
-        guidata(handles.main, handles);
-    end
-    
-    % enable the Reject Frames button
-    set(handles.button_reject, 'Enable', 'on');
-end
-
-function outputDiameter(handles, diameterVector)
-
-    if ~isempty( handles.mpbus.fullFileName )
-        [ ~, filename, ~ ] = fileparts( handles.mpbus.fullFileName );
-    else
-        filename = 'output';
-    end
-    
-    varname = sprintf('Diameter_%s', filename); 
-    handles.mpbus.output(varname, diameterVector);
-
-    figure; plot(diameterVector);
-end
-
-function calculateIntensity(hObject, ~)
-    % simply get the mean intensity (value) for all frames of the extracted image
-    handles = guidata(hObject);
-    
-    handles = clearResults(handles);
-    
-    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
-        intensity = mean( mean(handles.exImageData, 1), 3);
-        
-        % output the results right away (nothing to display in the results
-        % axes)
-        outputIntensity(handles, intensity);
-        
-        figure, plot(intensity);
-    end
-    
-    guidata(hObject, handles);
-end
-
-function outputIntensity(handles, intensity)
-
-        [~,filename,~] = fileparts(handles.mpbus.fullFileName);
-            
-        varname = sprintf('Intensity_%s', filename); 
-        handles.mpbus.output(varname, intensity);
-end
-
-function calculateVelocity(hObject, ~)
-    % get the Radon transform for each frame of the extracted image
-    
-    handles = guidata(hObject);
-    handles = clearResults(handles);
-    
-    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
-        handles.velocity = velocity(handles.exImageData);
-    end
-
-    guidata(hObject, handles);
-    
-    drawFrame(handles);
-    
-    set(handles.button_reject, 'Enable', 'on');
-end
 
 function selectColormap(hObject, ~, colormap)
     handles = guidata(hObject);
@@ -1245,6 +1175,24 @@ function msHeightChange_Callback(hObject, ~)
     handles = heightChange(handles, newHeight_px);
     
     guidata(hObject, handles);
+    
+    refreshAll(handles);
+end
+
+function selectChannel_Callback(hObject, ~, channelNumber)
+
+    handles = guidata(hObject);
+    
+    % toggle the button that was pressed
+    clearHandle = findall(handles.panel_channels, 'Tag', 'channelButton');
+    set(clearHandle, 'Value', 0);
+    
+    buttonHandle = handles.button_channel(channelNumber);
+    if ishghandle(buttonHandle)
+        set(buttonHandle, 'Value', 1);
+    end
+    
+    handles.mpbus.activeChannel = channelNumber;
     
     refreshAll(handles);
 end
@@ -1488,7 +1436,8 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
             set(handles.axes_results, ...
                 'YTick', [1, 45, 90, 135, 179],...
                 'YTickLabel', {'0', '1/4 pi', '1/2 pi', '3/4 pi', 'pi'},...
-                'XTick', []);
+                'XTick', [],...
+                'YDir', 'normal' );
             colormap(handles.colormap);
         end
     end
@@ -1564,6 +1513,141 @@ function last_callback(hObject, ~)
     drawFrame(handles, 0, handles.nFrames);
 end
 
+
+function calculateDiameter(hObject, ~)
+    handles = guidata(hObject);
+    handles = clearResults(handles);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        results = diameter(handles.exImageData);
+
+        handles.diameter = results;
+        % make the results visible
+        set(handles.axes_results, 'Visible', 'on');
+        drawFrame(handles);
+    
+        guidata(handles.main, handles);
+        
+        % enable the Reject Frames button
+        set(handles.button_reject, 'Enable', 'on');
+        set(handles.button_output, 'Enable', 'on');
+    end
+    
+
+end
+
+function outputDiameter(handles)
+
+    if ~isempty( handles.mpbus.fullFileName )
+        [ ~, filename, ~ ] = fileparts( handles.mpbus.fullFileName );
+    else
+        filename = 'output';
+    end
+    
+    diameterVector = [ handles.diameter.fwhm ];
+    
+    varname = sprintf('Diameter_%s', filename); 
+    handles.mpbus.output(varname, diameterVector);
+
+    figure; 
+    plot(diameterVector);
+    title('Diameter');
+    xlabel('Frames');
+    ylabel('Pixels');
+end
+
+function calculateIntensity(hObject, ~)
+    % simply get the mean intensity (value) for all frames of the extracted image
+    handles = guidata(hObject);
+    
+    handles = clearResults(handles);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        intensity = mean( mean(handles.exImageData, 1), 3);
+        
+        % output the results right away (nothing to display in the results
+        % axes)
+        outputIntensity(handles, intensity);
+        
+        figure, plot(intensity);
+    end
+    
+    guidata(hObject, handles);
+end
+
+function outputIntensity(handles, intensity)
+
+        [~,filename,~] = fileparts(handles.mpbus.fullFileName);
+            
+        varname = sprintf('Intensity_%s', filename); 
+        handles.mpbus.output(varname, intensity);
+end
+
+function calculateVelocity(hObject, ~)
+    % get the Radon transform for each frame of the extracted image
+   
+    handles = guidata(hObject);
+    handles = clearResults(handles);
+    
+    if isfield(handles, 'exImageData') && ~isempty(handles.exImageData)
+        handles.velocity = velocity(handles.exImageData);
+    end
+
+    guidata(hObject, handles);
+    drawFrame(handles);
+    
+    % enable the Reject Frames button
+    set(handles.button_reject, 'Enable', 'on');
+    set(handles.button_output, 'Enable', 'on');
+end
+
+function outputVelocity(handles)
+    % output the angle and then output the velocity in units of
+    % pixels/second
+    if ~isempty( handles.mpbus.fullFileName )
+        [ ~, filename, ~ ] = fileparts( handles.mpbus.fullFileName );
+    else
+        filename = 'output';
+    end
+    
+    angleVector = [ handles.velocity.angle ];
+
+    
+    varname = sprintf('RadonAngles_%s', filename); 
+    handles.mpbus.output(varname, angleVector);
+
+    figure; 
+    plot(angleVector / pi); 
+    title('Radon Transform Angle');
+    xlabel('Frames');
+    ylabel('Angle [pi radians]');
+    
+    % now find the velocity in units of pixels/second
+    % dx/dt = 1/tan(angle) because the coordinate system of the image is
+    % such that tan(angle) = dt/dx (it's rotated by pi/2 from a conventional
+    % coordinate system where x is vertical and t is horizontal.)
+    
+    % dx/dt will be in units of horizontal pixels per vertical pixel --
+    % convert vertical pixels to seconds
+    if ~isempty(handles.mpbus.xsize) && ~isempty(handles.mpbus.scanData)
+        secondsPerPixel = handles.mpbus.xsize * handles.mpbus.scanData.dt;
+        tUnitString = '/ second';
+    else
+        secondsPerPixel = 1;
+        tUnitString = '/ vertical pixel';
+    end
+        
+    % find the speed (the magnitude of the velocity)
+    speed = abs(( tan(angleVector) .* secondsPerPixel ) .^(-1));
+
+    figure; 
+    plot(speed); 
+    title('Velocity (magnitude)');
+    xlabel('Frames');
+    ylabel( sprintf('Pixels %s', tUnitString) );
+    
+end
+
 function toggleCalculator(handles, forceClear)
 
     if ~exist('forceClear', 'var')
@@ -1598,6 +1682,7 @@ function clearCalculator(hObject, ~)
     set(handles.popup_calculate, 'Value', 1);
     set(handles.axes_results, 'Visible', 'off');
     set(handles.button_reject, 'Enable', 'off');
+    set(handles.button_output, 'Enable', 'off');
     handles.diameter = [];
     handles.velocity = [];
     toggleCalculator(handles, true);
@@ -1613,10 +1698,18 @@ function handles = clearResults(handles)
     handles.diameter = [];
     handles.intensity = [];
     handles.velocity = [];
+    
+    cla(handles.axes_results, 'reset');
 end
 
-function saveCalculator(hObject, ~)
-    disp('save is not functional yet');
+function outputCalculation(hObject, ~)
+    handles = guidata(hObject);
+    
+    if isfield(handles, 'diameter') && ~isempty(handles.diameter)
+        outputDiameter(handles);
+    elseif isfield(handles, 'velocity') && ~isempty(handles.velocity)
+        outputVelocity(handles);
+    end
 end
 
 function popupCalculate(hObject, ~)
@@ -1681,7 +1774,7 @@ function loadSample(hObject, ~)
     % a small amount on each frame
     
     angle = rand * 2 * pi;
-    angle = pi / 2 + 0.05;  % TESTING
+    angle = pi / 2;  % TESTING
     fprintf('Test Image created with lines at an intial angle of %.1f degrees.\n', angle * 180 / pi );
     
     
@@ -1691,7 +1784,7 @@ function loadSample(hObject, ~)
         fullImage(:, :, frameIndex) = cframe;
         
         % continuously vary the angle
-        angle = angle + 0.01;
+        angle = angle - 0.01;
     end
     
     handles.exImageData = fullImage;
@@ -1739,17 +1832,23 @@ function rejectFrames(hObject, ~)
     questionString = [ 'Do you want to interpolate over the rejected frames? ' ...
                         'WARNING: There will be no way to tell which frames '...
                         'were rejected if you choose to interpolate.' ];
-    answer = questdlg(questionString, 'Reject Frames');
+    interpolate = 'Reject and Interpolate';
+    reject = 'Reject Only';
+    cancel = 'Cancel';
+    answer = questdlg(questionString, 'Reject Frames', interpolate, reject, cancel, interpolate);
     
     switch answer
-        case 'Yes'
+        case interpolate
             doInterpolate = true;
-        case 'No'
+        case reject
             doInterpolate = false;
         otherwise
-            doInterpolate = false;
+            return;
     end
     
+    
+    
+    interpolatedString = '';
     nRejected = 0;
     if isfield(handles, 'diameter') && ~isempty(handles.diameter)
         
@@ -1783,13 +1882,19 @@ function rejectFrames(hObject, ~)
                 
                 % reject this datapoint
                 handles.velocity(frameIndex).angle = NaN;
+                % also update the angle vector for the interpolation
+                % section
+                angleVector(frameIndex) = NaN;
                 nRejected = nRejected + 1;
             end
         end
         
+        
         % now interpolate over the rejected values
         if doInterpolate
             rejected = isnan(angleVector);
+            nRejected = sum(rejected);
+            
             t = 1 : length(angleVector);
             angleVector(rejected) = interp1( ...
                     t(~rejected), angleVector(~rejected), t(rejected) );
@@ -1807,16 +1912,17 @@ function rejectFrames(hObject, ~)
             for frameIndex = 1 : nFrames
                 handles.velocity(frameIndex).angle = angleVector(frameIndex);
             end
+            
+            nRemaining = sum( isnan(angleVector) );
+            
+            
+            interpolatedString = sprintf('\n%d out of %d rejected frames replaced by interpolation.\n', nRejected - nRemaining, nRejected);
         end
     end
     
-    if nRejected == 1
-        messageString = sprintf('1 frame out of %d rejected.', nFrames);
-    else
-        messageString = sprintf('%d frames out of %d rejected', nRejected, nFrames);
-    end
-    
-    helpdlg(messageString, 'Finished Rejecting Frames');
+    rejectedString = sprintf('%d frames out of %d rejected.\n', nRejected, nFrames);
+
+    helpdlg([rejectedString, interpolatedString], 'Reject Frames');
     
     guidata(hObject, handles);
 end
@@ -1920,20 +2026,103 @@ function handles = populateGUI(handles)
     handles.BUTTON_WIDTH = 80;
     handles.BUTTON_HEIGHT = 25;
     handles.PADDING = 10;
-
+    
     % create vertical and horizontal "anchors"
     figurePixelPosition = getpixelposition(handles.main);
     figureSize = [ figurePixelPosition(3), figurePixelPosition(4) ];
     
+
     % horizontal anchor
     hAnchor = figureSize(2) / 2.5;
     
     
+%%% Channel Buttons
+    channelButton_height = handles.BUTTON_HEIGHT;
+    channelButton_width = channelButton_height;
+    channelButton_padding = handles.PADDING;
+    channelLabel_height = channelButton_height;
+    channelLabel_width = handles.BUTTON_WIDTH;
+    
+    chanelButton_X = (0:3) .* (channelButton_width + channelButton_padding)...
+        + channelLabel_width + channelButton_padding;
+    
+    channelButton_y = handles.PADDING / 2;
+    
+    channels_height = 1.5 * channelButton_height;
+    channels_width = 4 * (channelButton_width + channelButton_padding) ...
+                       + channelLabel_width;
+    
+    channels_y = figureSize(2) - channels_height;
+    
+    % need to define the top view panel height and width now because the
+    % channels panel will be centered on it 
+    topView_height = (figureSize(2) - hAnchor) - channels_height;
+    topView_width = topView_height;         % assuming square image
+    
+    % now channels x can be defined
+    channels_x = (topView_width - channels_width)/2;
+    
+    handles.panel_channels = uipanel(...
+        'Parent', handles.main,...
+        'Clipping','on',...
+        'BorderType','none',...
+        'Units', 'pixels',...
+        'Position',[ channels_x, channels_y, channels_width, channels_height ],...
+        'Tag','panel_channels' );
+    
+     uicontrol(...
+        'Parent', handles.panel_channels,...
+        'Style', 'text',...
+        'Units', 'pixels',...
+        'Position', [ 0, 0, channelLabel_width, channelLabel_height ],...
+        'Tag','activeRegionControl',...
+        'HorizontalAlignment', 'right',...
+        'String', 'Channel:' );
+    
+    handles.button_channel(1) = uicontrol(...
+        'Parent',handles.panel_channels,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[chanelButton_X(1) channelButton_y channelButton_width channelButton_height],...
+        'Callback', {@selectChannel_Callback, 1},...
+        'String','1', ...
+        'Tag', 'channelButton' );
+    
+    handles.button_channel(2) = uicontrol(...
+        'Parent',handles.panel_channels,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[chanelButton_X(2) channelButton_y channelButton_width channelButton_height],...
+        'Callback', {@selectChannel_Callback, 2},...
+        'String','2', ...
+        'Tag', 'channelButton' );
+    
+    handles.button_channel(3) = uicontrol(...
+        'Parent',handles.panel_channels,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[chanelButton_X(3) channelButton_y channelButton_width channelButton_height],...
+        'Callback', {@selectChannel_Callback, 3},...
+        'String','3', ...
+        'Tag', 'channelButton' );
+    
+    handles.button_channel(4) = uicontrol(...
+        'Parent',handles.panel_channels,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[chanelButton_X(4) channelButton_y channelButton_width channelButton_height],...
+        'Callback', {@selectChannel_Callback, 4},...
+        'String','4', ...
+        'Tag', 'channelButton');
+%%% END CHANNEL BUTTONS
+    
+
 %%% TOP VIEW    
     topView_x = handles.PADDING;
     topView_y = hAnchor;
-    topView_height = (figureSize(2) - hAnchor) - handles.PADDING;
-    topView_width = topView_height;         % assuming square image
+    % top view height and width are defined in the channel buttons section
+    % above
+
     
     handles.panel_topView = uipanel(...
         'Parent',handles.main,...
@@ -1958,7 +2147,7 @@ function handles = populateGUI(handles)
     cp_x = topView_x + topView_width;
     cp_y = hAnchor;
     cp_width = handles.BUTTON_WIDTH * 2;
-    cp_height = (figureSize(2) - hAnchor) - handles.PADDING;
+    cp_height = topView_height;
     handles.panel_control = uipanel(...
         'Parent',handles.main,...
         'Title','Selected Region',...
@@ -2002,6 +2191,8 @@ function handles = populateGUI(handles)
         'YTick', [],...
         'Tag','axes_lineScan' );
 %%%
+
+
 
     handles = populateControlPanel(handles);
     handles = populateCalculationPanel(handles);
@@ -2390,14 +2581,25 @@ function handles = populateCalculationPanel(handles)
         'Position', [editX yLocations(3) editWidth editHeight],...
         'Tag', 'calculator' );
     
-    handles.button_save = uicontrol(...
+    handles.button_reject = uicontrol(...
         'Parent', handles.panel_calcControl,...
         'Style', 'pushbutton',...
         'Units', 'normalized',...
-        'String', 'Save',...
-        'Callback', @saveCalculator,...
-        'Position', [ buttonX yLocations(5) buttonWidth buttonHeight ],...
-        'Tag', 'calculator' );
+        'String', 'Reject Frames...',...
+        'Callback', @rejectFrames,...
+        'Position', [ buttonX yLocations(8) buttonWidth buttonHeight ],...
+        'Tag', 'calculator', ...
+        'Enable', 'off' );
+    
+    handles.button_output = uicontrol(...
+        'Parent', handles.panel_calcControl,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Output',...
+        'Callback', @outputCalculation,...
+        'Position', [ buttonX yLocations(10) buttonWidth buttonHeight ],...
+        'Tag', 'calculator', ...
+        'Enable', 'off' );
     
     handles.button_clear = uicontrol(...
         'Parent', handles.panel_calcControl,...
@@ -2405,7 +2607,7 @@ function handles = populateCalculationPanel(handles)
         'Units', 'normalized',...
         'String', 'Clear',...
         'Callback', @clearCalculator,...
-        'Position', [ buttonX yLocations(7) buttonWidth buttonHeight ],...
+        'Position', [ buttonX yLocations(12) buttonWidth buttonHeight ],...
         'Tag', 'calculator' );
         
     popupX = (labelX + editX) / 2;
@@ -2418,18 +2620,10 @@ function handles = populateCalculationPanel(handles)
         'Units', 'normalized',...
         'Callback', @popupCalculate,...
         'String', {s.head, s.diameter, s.velocity, s.intensity},...
-        'Position', [ popupX, yLocations(9), popupWidth, editHeight ],...
+        'Position', [ popupX, yLocations(5), popupWidth, editHeight ],...
         'Tag', 'calculator' );
     
-    handles.button_reject = uicontrol(...
-        'Parent', handles.panel_calcControl,...
-        'Style', 'pushbutton',...
-        'Units', 'normalized',...
-        'String', 'Reject Frames...',...
-        'Callback', @rejectFrames,...
-        'Position', [ buttonX yLocations(12) buttonWidth buttonHeight ],...
-        'Tag', 'calculator', ...
-        'Enable', 'off' );
+
   
     %{
     buttonWidth = handles.BUTTON_WIDTH / panelWidth;

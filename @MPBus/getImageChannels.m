@@ -18,6 +18,7 @@ end
 % for now, just set the active channel to the first channel in the channels
 % vector
 this.activeChannel = channels_vector(1);
+
 return;
 
 function [status,dataOut] = getChannel(~, groupName, channels_vector)   
