@@ -9,6 +9,9 @@ handles = createGUI();
 
 % Constants:
 handles.SLIDER_WIDTH = 20;
+handles.LINESTYLE_ACTIVE = '-';
+handles.LINESTYLE_INACTIVE = ':';
+handles.LINESTYLE_REPEATED = ':cyan';
 
 handles.MINIMUM_WINDOW_PERIOD = 15;
 handles.IMAGE_SCALE_FACTOR = 1;     % used by calculator
@@ -157,12 +160,28 @@ function handles = drawLineView(handlesIn, startingLine)
     
     if handles.isLoaded
         axesPosition = getpixelposition(handles.axes_lineScan);
-        finishLine = startingLine + axesPosition(4);
+        axesHeight = round(axesPosition(4));
+        % the finish line can be no greater than the last line of the HDF5
+        % file
+        maxFinishLine = handles.mpbus.ysize * handles.mpbus.numFrames;
+        finishLine = min( [startingLine + axesHeight, maxFinishLine] );
+        
         visibleRange = startingLine : finishLine;
         domain = [1, floor(axesPosition(3))];
 
         lineData = handles.mpbus.readLines(visibleRange);
-
+        
+        % make sure lineData is the same height as the axes -- pad with
+        % gray if it isn't
+        grayValue = max(max(lineData));
+        
+        lineDataHeight = size(lineData, 1);
+        
+        if lineDataHeight < axesHeight
+            lineData( lineDataHeight : axesHeight, : ) = grayValue;
+        end
+        
+        
         set(handles.main,'CurrentAxes',handles.axes_lineScan);    
         cla
         imagesc(lineData, 'ButtonDownFcn', @mouseClick_line);
@@ -175,8 +194,9 @@ function handles = drawLineView(handlesIn, startingLine)
         visibleLocations(visibleLocations==0) = [];     % remove unmatched elements
         handles.windowHorizontalPixelLocations = visibleLocations;
 
+        
         for location = visibleLocations
-            line(domain, [location location], ...
+            line([0, size(lineData, 2)], [location location], ...
                 'color','red',...
                 'Tag','scanWindow',...
                 'LineStyle',':',...
@@ -203,27 +223,45 @@ function drawRegionInLineView(handles)
         x2 = region.rightBoundary;
                 
         if isempty(region.lineStyle)
-            region.lineStyle = ':';
+            region.lineStyle = handles.LINESTYLE_INACTIVE;
         end
         
-        if strcmp(region.lineStyle, '-')
-            % color the lines cyan as well
-            leftColor = 'cyan';
-            rightColor = 'cyan';
-        else
-            leftColor = 'green';
-            rightColor = 'red';
+        switch region.lineStyle
+            case handles.LINESTYLE_ACTIVE
+                % color the lines cyan as well
+                leftColor = 'cyan';
+                rightColor = 'cyan';
+                lineStyle = handles.LINESTYLE_ACTIVE;
+                
+            case handles.LINESTYLE_INACTIVE
+                leftColor = 'green';
+                rightColor = 'red';
+                lineStyle = handles.LINESTYLE_INACTIVE;
+                
+            case handles.LINESTYLE_REPEATED
+                % this region is a repition of the active region
+                leftColor = 'cyan';
+                rightColor = 'cyan';
+                lineStyle = handles.LINESTYLE_INACTIVE;
+                
+            otherwise
+                % catch all
+                region.lineStyle = handles.LINESTYLE_INACTIVE;
+                leftColor = 'green';
+                rightColor = 'red';
+                lineStyle = handles.LINESTYLE_INACTIVE;
         end
+                
         
         line([x1,x1],Y,...
             'Tag','regionLine',...
             'Color',leftColor,...
-            'LineStyle',region.lineStyle,...
+            'LineStyle',lineStyle,...
             'ButtonDownFcn',@mouseClick_line );
         line([x2,x2],Y,...
             'Tag','regionLine',...
             'Color',rightColor,...
-            'LineStyle',region.lineStyle,...
+            'LineStyle',lineStyle,...
             'ButtonDownFcn',@mouseClick_line );
     end
 end
@@ -462,29 +500,71 @@ function handles = createRegions(handlesIn)
     end
 end
 
+function regionIndexList = getRepeatedRegion(handles, regionIndex)
+    % first, get the ID
+    pathObjNum = handles.mpbus.scanData.pathObjNum;
+    activeObjNum = pathObjNum( pathObjNum == regionIndex, : );
+    activeID = activeObjNum(1,2);
+
+    % then find any other regions that have the same ID
+    repeatedObjNum = pathObjNum( pathObjNum(:,2) == activeID, : );
+
+    % get a unique list of all the region indicies that corespond to this
+    % path element
+    regionIndexList = unique( repeatedObjNum(:,1) );
+
+end
+
 function activateRegion(handles, regionIndex)
     % highlight the selected region line in the top view
     allLines = findall(handles.axes_topView, 'Tag', 'windowLine');
     set(allLines, ...
-        'LineStyle', ':',...
+        'LineStyle', handles.LINESTYLE_INACTIVE,...
         'Color', 'blue');
     
     regionLine = findall(handles.axes_topView, 'UserData', regionIndex);
     set(regionLine, ...
-        'LineStyle', '-',...
+        'LineStyle', handles.LINESTYLE_ACTIVE,...
         'Color', 'cyan');
-                
-    % then update the region line style in the line scan view
+           
+    % (line scan view)
+    % reset the linestyle of all region lines before setting the active and
+    % repeated region linestyles
+
+    handles = drawLineView(handles);
     
-    for index = 1 : length(handles.region)
-        if index == regionIndex
-            handles.region(index).lineStyle = '-';
-        else
-            handles.region(index).lineStyle = ':';
+    % find any regions that corespond to this same path element -- if this
+    % is the case then this path element is part of a repeating group.
+    % For now, just indicate the additional repeated regions with dashed
+    % cyan lines. When this region is extracted, ask the user if they want
+    % to grab all the repeated region data as well
+    
+    if regionIndex > 0
+        % get a unique list of all the region indicies that corespond to this
+        % path element
+        allRegionIndicies = getRepeatedRegion(handles, regionIndex);
+
+        % set the correct line styles of all the regions
+        for index = 1 : length(handles.region)
+            isFoundIndex = find( allRegionIndicies == index );
+            isFound = logical(isFoundIndex);
+
+            if isFound
+                handles.region(index).lineStyle = handles.LINESTYLE_REPEATED;
+            else
+                handles.region(index).lineStyle = handles.LINESTYLE_INACTIVE;
+            end
         end
+        
+        % and make sure the actual region the user clicked on is active (not
+        % just repeated)
+        handles.region(regionIndex).lineStyle = handles.LINESTYLE_ACTIVE;
+    else
+        for index = 1 : length(handles.region)
+            handles.region(index).lineStyle = handles.LINESTYLE_INACTIVE;
+        end   
     end
     
-    handles = drawLineView(handles);
     
     
     % save this as the active region
@@ -889,7 +969,7 @@ function loadScanFile(hObject, ~, optional_filename)
     
     
     % setup the sliders
-    range = [1, (handles.mpbus.ysize * handles.mpbus.numFrames)];
+    range = [1, (handles.mpbus.ysize * handles.mpbus.numFrames) - handles.mpbus.ysize];
     handles = createLineSlider(handles, range);
     
     
@@ -1087,9 +1167,57 @@ function exportActiveRegion(hObject, ~)
     handles = guidata(hObject);
     
     if ~isempty(handles.activeRegion)
+        
+        repeatedRegionIndicies = getRepeatedRegion(handles, handles.activeRegionIndex);
+        
+        nRepeats = length(repeatedRegionIndicies);
+        
+        if nRepeats > 1
+            % this path element is repeated -- find out if the user wants
+            % to only extract this part of the data, or interlace all the
+            % repititions together
+            
+            questionRaw = ['This region is part of a group that was ',...
+                'scanned %d times for every full cycle through the scan path.\n',...
+                '\nDo you want to extract the data from all these repitions ',...
+                'by combining them line by line?\n', ...
+                '\nOr do you want to extract data only for this particular repition?'];
+            
+            question = sprintf(questionRaw, nRepeats);
+            allRepeats = 'All Repititions';
+            thisRepeat = 'Only This Repitition';
+            
+            answer = questdlg(question, 'Extract Scan Data', allRepeats, thisRepeat, allRepeats);
+            
+            switch answer
+                case allRepeats
+                    extractRepetitions = true;
+                case thisRepeat
+                    extractRepetitions = false;
+                otherwise
+                    return;
+            end
+        else
+            extractRepetitions = false;
+        end
 
-        domain = [ handles.activeRegion.leftBoundary,...
+        
+        if extractRepetitions
+            domain = zeros( 2, nRepeats );
+            %TODO: finish this -- need to update readFrames so that it can
+            %handle 2 dimensional domain
+            for repetitionIndex = 1 : nRepeats
+               regionIndex = repeatedRegionIndicies(repetitionIndex); 
+                
+               domain( :, repetitionIndex ) = ...
+                   [ handles.region(regionIndex).leftBoundary, ...
+                     handles.region(regionIndex).rightBoundary ];
+            end
+        else
+            domain = [ handles.activeRegion.leftBoundary,...
                     handles.activeRegion.rightBoundary ];
+        end
+        
 
         handles = readFrames(handles, domain, handles.windowPeriod); 
 
