@@ -310,6 +310,7 @@ function updateMousePosition_topView(handles, x, y)
     % cursor is in the top view axes
     % determine which line is the closest to the cursor
     lineList = findall(handles.axes_topView, 'Tag', 'windowLine');
+    
     if ~isempty(lineList)
 
         closestPointList = cell(length(lineList), 1);
@@ -400,9 +401,13 @@ function [ isClose, horizontalLine] = closeToHorizontalLine(handles, lineNumber)
     isClose = ~isempty(foundIndex);
 end
 
-function closestPoint = getClosestPoint(lineHandle, x, y)
-    X = get(lineHandle, 'XData');
-    Y = get(lineHandle, 'YData');
+function closestPoint = getClosestPoint(graphicsHandle, x, y)
+
+    tag = get(graphicsHandle, 'Tag');
+    disp(tag);
+
+    X = get(graphicsHandle, 'XData');
+    Y = get(graphicsHandle, 'YData');
      
     lineVector = [ X(2) - X(1), Y(2) - Y(1) ];
     pointVector = [ x - X(1), y - Y(1) ];
@@ -1064,7 +1069,7 @@ function drawScanRegion(hObject, ~)
             rectangle('Position',[boxXmin,boxYmin, ...
                 boxXmax-boxXmin,boxYmax-boxYmin], ...
                 'EdgeColor','green',...
-                'Tag','windowLine',...
+                'Tag','windowBox',...
                 'UserData',i);
         end
         
@@ -1214,7 +1219,7 @@ function exportActiveRegion(hObject, ~)
                      handles.region(regionIndex).rightBoundary ];
             end
         else
-            domain = [ handles.activeRegion.leftBoundary,...
+            domain( :, 1) = [ handles.activeRegion.leftBoundary,...
                     handles.activeRegion.rightBoundary ];
         end
         
@@ -1330,14 +1335,19 @@ end
 %% Image Extraction/Calculation Functions 
 function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
     % read in image data
-
-    frameWidth = domain(2) - domain(1) + 1;
+    FIRST_REPEAT = 1;
+    
+    frameWidth = domain(2,FIRST_REPEAT) - domain(1,FIRST_REPEAT);
     frameHeight = windowPeriod;
+    
+    % the full frame height is the height of the interlaced column
+    nRepeats = size(domain, 2);
+    fullFrameHeight = frameHeight * nRepeats;
     nFrames = floor( handles.mpbus.ysize * handles.mpbus.numFrames / frameHeight );
     
-    handles.exImageWidth = (domain(2) - domain(1) + 1)...
+    handles.exImageWidth = (domain(2,FIRST_REPEAT) - domain(1,FIRST_REPEAT) + 1)...
                         * handles.IMAGE_SCALE_FACTOR;
-    handles.exImageHeight = windowPeriod * handles.IMAGE_SCALE_FACTOR;
+    handles.exImageHeight = fullFrameHeight * handles.IMAGE_SCALE_FACTOR;
     
     % forceNFrames is used for debugging purposes to only extract a set
     % amount of frames
@@ -1358,7 +1368,7 @@ function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
         % Out Of Memory errors)
         allocatedHeight = size(handles.exImageData, 1);
         allocatedWidth = size(handles.exImageData, 2);
-        dHeight = frameHeight - allocatedHeight;
+        dHeight = fullFrameHeight - allocatedHeight;
         dWidth = frameWidth - allocatedWidth;
         
         adjustedHeight = allocatedHeight + dHeight;
@@ -1382,7 +1392,7 @@ function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
 
     else
         % no image data yet, allocate a new matrix
-        handles.exImageData = zeros(frameHeight, frameWidth, nFrames, 'int16' );
+        handles.exImageData = zeros(fullFrameHeight, frameWidth, nFrames, 'int16' );
     end
     
     handles.nFrames = nFrames;
@@ -1393,7 +1403,11 @@ function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
         startingLine = finishLine - frameHeight + 1;
     
         frameData = handles.mpbus.readLines(startingLine : finishLine);
-        frameDataCropped = frameData(: , domain(1) : domain(2));
+        
+        %frameDataCropped = frameData(: , domain(1) : domain(2));
+        frameDataCropped = interlaceFrames(frameData, domain);
+        
+        x = handles.exImageData;
         
         handles.exImageData( :, :, frameIndex) = frameDataCropped;
         
@@ -1411,6 +1425,44 @@ function handles = readFrames(handles, domain, windowPeriod, forceNFrames)
     
     set(handles.main, 'CurrentAxes', handles.axes_exImage);
     drawFrame(handles, 0, 1);  
+end
+
+function interlacedColumn = interlaceFrames(frameData, domain)
+    % take 1 or more columns of data from frameData and interlace into 1
+    % column. Columns are specified by domain. Can be called with only 1
+    % column specified.
+    % (the first data column is the "FIRST REPEAT")
+    FIRST_REPEAT = 1;
+    nRepeats = size(domain, 2);
+    columnWidth = domain(2,FIRST_REPEAT) - domain(1,FIRST_REPEAT);
+    columnHeight = size(frameData, 1);
+    
+    columnData = zeros( columnHeight, columnWidth, nRepeats );
+    
+    for repeatIndex = 1 : nRepeats
+        startIndex = domain(1,repeatIndex);
+        finishIndex = startIndex + columnWidth - 1;
+        
+        columnData( :, :, repeatIndex ) = ...
+            frameData( :, startIndex : finishIndex );
+    end
+    
+    % now interlace the columns into just 1 column
+    fullHeight = columnHeight * nRepeats;
+    interlacedColumn = zeros( fullHeight, columnWidth );
+    
+%     %TESTING
+%     x = columnData(:, :, 1);
+%     interlacedColumn( 1:3:fullHeight, : ) = columnData( :, :, 1);
+%     %END TESTING
+%     
+    
+    for repeatIndex = 1 : nRepeats
+
+        interlacedColumn( repeatIndex : nRepeats : fullHeight, : ) = ...
+            columnData( :, :, repeatIndex );
+    end
+
 end
 
 %%% Drawing Functions
