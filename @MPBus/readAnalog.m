@@ -6,6 +6,10 @@ function data = readAnalog( this, channel, frameRange )
 % then initialize chData (allocate memory) and read in
 % all the frames in frameRange.
 
+if ~exist('frameRange', 'var')
+    frameRange = 1 : this.numFrames;
+end
+
 % initial dataset name
 datasetName = sprintf('/AnalogCh%d/%08d', channel, 1);
 try
@@ -28,7 +32,7 @@ data = zeros(frameSize * nFrames,1,'int16');
 
 % open the group
 try
-    gid = HFG.open(this.fid, sprintf('/AnalogCh%d',channel));
+    gid = H5G.open(this.fid, sprintf('/AnalogCh%d',channel));
 catch exception
     this.dispException(exception);
     data = 0;

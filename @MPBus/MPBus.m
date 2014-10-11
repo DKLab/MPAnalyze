@@ -15,6 +15,8 @@ classdef MPBus < handle
         activeChannel;  % the channel that is currently being analyzed
         channelList;    % the list of channels available in the
                         % current hdf5 file
+        analogChannelList;  % same as channelList but for the analog (stim) channels
+        
         numFrames;      % total number of frames in a dataset
         xsize;          % frame width
         ysize;          % frame height

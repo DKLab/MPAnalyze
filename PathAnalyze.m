@@ -94,6 +94,9 @@ function refreshAll(handles)
     channelButtons = findall(handles.panel_channels, 'Tag', 'channelButton');
     set(channelButtons, 'Value', 0, 'Enable', 'off');
     
+    % turn Stimulus Triggered Average off
+    toggleSTA(handles.main, [], 0);
+    
     if ~isempty(handles.mpbus.fullFileName)
 
         % for each image channel, enable the corresponding channel button
@@ -239,7 +242,7 @@ function drawRegionInLineView(handles)
                 lineStyle = handles.LINESTYLE_INACTIVE;
                 
             case handles.LINESTYLE_REPEATED
-                % this region is a repition of the active region
+                % this region is a repetition of the active region
                 leftColor = 'cyan';
                 rightColor = 'cyan';
                 lineStyle = handles.LINESTYLE_INACTIVE;
@@ -506,6 +509,14 @@ end
 function regionIndexList = getRepeatedRegion(handles, regionIndex)
     % first, get the ID
     pathObjNum = handles.mpbus.scanData.pathObjNum;
+    
+    if size(pathObjNum,2) == 1
+        % there are no groups in this file -- return a list that only
+        % contains the regionIndex that was passed in
+        regionIndexList(1) = regionIndex;
+        return;
+    end
+    
     activeObjNum = pathObjNum( pathObjNum == regionIndex, : );
     activeID = activeObjNum(1,2);
 
@@ -974,10 +985,7 @@ function loadScanFile(hObject, ~, optional_filename)
     % setup the sliders
     range = [1, (handles.mpbus.ysize * handles.mpbus.numFrames) - handles.mpbus.ysize];
     handles = createLineSlider(handles, range);
-    
-    
-    % setup region boundaries
-    handles = createRegions(handles);
+   
     
     % draw image
     drawTopView(handles);
@@ -988,6 +996,8 @@ function loadScanFile(hObject, ~, optional_filename)
     drawScanRegion(handles.main, []);
     
     resizeFigure(handles.main, []);
+    
+    resetImage(handles.main, []);
 end
 
 
@@ -1156,7 +1166,7 @@ function resetImage(hObject, ~)
     
     % and reset the window period
     handles = heightChange(handles, 100);
-    
+
     refreshAll(handles);
 end
 
@@ -1208,30 +1218,30 @@ function exportActiveRegion(hObject, ~)
             
             questionRaw = ['This region is part of a group that was ',...
                 'scanned %d times for every full cycle through the scan path.\n',...
-                '\nDo you want to extract the data from all these repitions ',...
+                '\nDo you want to extract the data from all these repetitions ',...
                 'by combining them line by line (interlace)?\n', ...
                 '\nOr do you want to extract data only for this particular instance?'];
             
             question = sprintf(questionRaw, nRepeats);
-            allRepeats = 'All Repititions';
-            thisRepeat = 'Only This Repitition';
+            allRepeats = 'All Repetitions';
+            thisRepeat = 'Only This Repetition';
             
             answer = questdlg(question, 'Extract Scan Data', allRepeats, thisRepeat, allRepeats);
             
             switch answer
                 case allRepeats
-                    extractRepetitions = true;
+                    extractrepetition = true;
                 case thisRepeat
-                    extractRepetitions = false;
+                    extractrepetition = false;
                 otherwise
                     return;
             end
         else
-            extractRepetitions = false;
+            extractrepetition = false;
         end
 
         
-        if extractRepetitions
+        if extractrepetition
             domain = zeros( 2, nRepeats );
             %TODO: finish this -- need to update readFrames so that it can
             %handle 2 dimensional domain
@@ -1353,6 +1363,26 @@ function selectChannel_Callback(hObject, ~, channelNumber)
     
     refreshAll(handles);
 end
+
+function toggleSTA(hObject, ~, staIsOn)
+    handles = guidata(hObject);
+    
+    if staIsOn
+        % keep the 'On' button deactivated -- it will be activated after
+        % user is done with the staSetup GUI.
+        set(handles.button_sta_on, 'Value', false);
+        
+        % setup the Stimulus Triggered Average
+        [success, stimVector] = staSetup( handles.mpbus );
+        
+        if ~success
+            staIsOn = false;
+        end
+    end
+    set(handles.button_sta_on, 'Value', staIsOn);
+    set(handles.button_sta_off, 'Value', ~staIsOn);
+end
+
 %%% END CALLBACKS
 
 
@@ -1726,6 +1756,11 @@ function calculateDiameter(hObject, ~)
         % enable the Reject Frames button
         set(handles.button_reject, 'Enable', 'on');
         set(handles.button_output, 'Enable', 'on');
+    else
+        
+        exportActiveRegion(hObject, []);
+        
+        
     end
     
 
@@ -2006,7 +2041,7 @@ function smallExportActiveRegion(hObject, ~)
     
     if ~isempty(handles.activeRegion)
 
-        domain = [ handles.activeRegion.leftBoundary,...
+        domain( :, 1 ) = [ handles.activeRegion.leftBoundary,...
                     handles.activeRegion.rightBoundary ];
 
         handles = readFrames(handles, domain, handles.windowPeriod, SAMPLE_SIZE); 
@@ -2231,7 +2266,7 @@ function handles = populateGUI(handles)
     hAnchor = figureSize(2) / 2.5;
     
     
-%%% Channel Buttons
+%%% CHANNEL PANEL
     channelButton_height = handles.BUTTON_HEIGHT;
     channelButton_width = channelButton_height;
     channelButton_padding = handles.PADDING;
@@ -2309,8 +2344,7 @@ function handles = populateGUI(handles)
         'Callback', {@selectChannel_Callback, 4},...
         'String','4', ...
         'Tag', 'channelButton');
-%%% END CHANNEL BUTTONS
-    
+%%% END CHANNEL PANEL
 
 %%% TOP VIEW    
     topView_x = handles.PADDING;
@@ -2335,7 +2369,7 @@ function handles = populateGUI(handles)
         'XTick', [],...
         'YTick', [],...
         'Tag','axes_topView' );
-%%%
+%%% END TOP VIEW
 
 %%% CONTROL PANEL
  % create the selected region and path info panels
@@ -2350,21 +2384,74 @@ function handles = populateGUI(handles)
         'Units', 'pixels',...
         'Position',[cp_x cp_y cp_width cp_height],...
         'Tag','panel_control' );
-%%%
+%%% END CONTROL PANEL
 
 %%% CALCULATION PANEL
-    x = cp_x + cp_width;
-    y = hAnchor;
-    width = figureSize(1) - x - handles.PADDING;
-    height = topView_height;
+    calc_x = cp_x + cp_width;
+    calc_y = hAnchor;
+    calc_width = figureSize(1) - calc_x - handles.PADDING;
+    calc_height = topView_height;
     handles.panel_calculator = uipanel(...
         'Parent',handles.main,...
         'Title','Calculations',...
         'Clipping','on',...
         'Units', 'pixels',...
-        'Position',[ x, y, width, height ],...
+        'Position',[ calc_x, calc_y, calc_width, calc_height ],...
         'Tag','panel_calculator' );
-%%%
+%%% END CALCULATION PANEL
+
+%%% STIMULUS TRIGGERED AVERAGING PANEL
+    staLabel_width = 2 * handles.BUTTON_WIDTH;
+    staLabel_height = channelLabel_height;
+    staButton_width = channelButton_width;
+    staButton_height = channelButton_height;
+    staButton_y = channelButton_y;
+    staButton_padding = 10;
+
+    sta_y = channels_y;
+    sta_height = channels_height;
+    sta_width = staLabel_width + 2 * staButton_width + staButton_padding;
+    sta_x = calc_x + (calc_width - sta_width)/2;
+
+    sta_on_x = staLabel_width + staButton_padding;
+    sta_off_x = sta_on_x + staButton_width + staButton_padding;
+
+    handles.panel_sta = uipanel(...
+        'Parent', handles.main,...
+        'Clipping','on',...
+        'BorderType','none',...
+        'Units', 'pixels',...
+        'Position',[ sta_x, sta_y, sta_width, sta_height ],...
+        'Tag','panel_channels' );
+    
+     uicontrol(...
+        'Parent', handles.panel_sta,...
+        'Style', 'text',...
+        'Units', 'pixels',...
+        'Position', [ 0, 0, staLabel_width, staLabel_height ],...
+        'HorizontalAlignment', 'right',...
+        'String', 'Stimulus Triggered Average' );
+    
+    handles.button_sta_on = uicontrol(...
+        'Parent',handles.panel_sta,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[sta_on_x staButton_y staButton_width staButton_height],...
+        'Callback', {@toggleSTA, true},...
+        'String','On', ...
+        'Tag', 'staButton' );
+    
+    handles.button_sta_off = uicontrol(...
+        'Parent',handles.panel_sta,...
+        'Style','togglebutton',...
+        'Units','pixels',...
+        'Position',[sta_off_x staButton_y staButton_width staButton_height],...
+        'Callback', {@toggleSTA, false},...
+        'String','Off', ...
+        'Tag', 'staButton' );
+        
+
+%%% END STIMULUS TRIGGERED AVERAGING PANEL
 
 %%% LINE SCAN
     x = handles.PADDING;
@@ -2385,7 +2472,7 @@ function handles = populateGUI(handles)
         'XTick', [],...
         'YTick', [],...
         'Tag','axes_lineScan' );
-%%%
+%%% END LINE SCAN
 
 
 
