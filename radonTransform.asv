@@ -43,10 +43,9 @@ end
 block = double(block);              % make sure this is a double
 block = block - mean(block(:));     % subtract off mean
 
-block = transpose(block);
 %degree = uniformityCorrection;
 
-blockMean = mean(block,1);
+blockMean = transpose(mean(block,2));
 xaxis = 1:length(blockMean);
 
 assignin('base', 'radonBlockMean', blockMean);
@@ -67,6 +66,7 @@ end
 % pre/post block for debugging
 preBlock = block;
 for i = 1:size(block,1)
+    first = block(i:,
    block(i,:) = block(i,:) - blockMeanFit;
 end
 postBlock = block;
@@ -75,7 +75,6 @@ fprintf('max error = %0.4f\n', max(max(errorBlock)) );
 
 block = block - mean(block(:));  % make sure mean is still zero
 
-block = transpose(block);
 
 %% now, do the radon stuff
 % initial transform, over entire theta range

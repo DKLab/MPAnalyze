@@ -1975,13 +1975,9 @@ function outputVelocity(handles)
     frameNumberString = get(handles.edit_frameNumber, 'String');
     frameNumber = str2double(frameNumberString);
     
-    if ~isnan(frameNumber) && frameNumber > 0 && frameNumber <= handles.nFrames
+    if ~isnull(frameNumber) && frameNumber > 0 && frameNumber <= handles.nFrames
        % this is a valid frame number
-       frameImage = handles.exImageData( :, :, frameNumber);
-       frameTransform = handles.velocity(frameNumber).transform;
-       
-       assignin('base', sprintf('image_frame_%d', frameNumber), frameImage);
-       assignin('base', sprintf('transform_frame_%d', frameNumber), frameTransform);
+       frameImage = handles.exImage(
         
     end
 end

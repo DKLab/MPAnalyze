@@ -1,27 +1,58 @@
-function [success, stimVector] = staSetup( mpbus )
+function [success, stimVector, pixelsLeft, pixelsRight] = staSetup( mpbus )
 %STASETUP Summary of this function goes here
 %   Detailed explanation goes here
 
     handles = createGUI();
+    
+    % ensure the handles struct always has these fields
+
+    handles.success = false;
     handles.mpbus = mpbus;
+    handles.dragIsActive = false;
     handles.rawStimVector = readAnalog(handles);
+    handles.stimVector = [];
+    handles.reducedStimVector = [];
+    handles.pixelsLeft = 1;
+    handles.pixelsRight= 1;
+    
+    handles.LIGHT_RED = [1,0.8,0.8];
+    handles.LIGHT_GREEN = [0.8,1,0.8];
+   
+    
+    % set the threshold based on the rawStimVector that was just read in
+    handles = setThreshold(handles, max(handles.rawStimVector) / 2);
     
     handles = populateGUI(handles);
     
-    drawStimVector(handles);
-
     % return values for premature close
     success = false;
     stimVector = [];
     
-    % ensure the handles struct always has these fields
-    handles.stimVector = [];
-    handles.success = false;
+    % if rawStimVector is empty then there was no analog data found
+    if isempty(handles.rawStimVector)
+        warndlg('No analog channel was found in the HDF5 file.');
+        close(handles.main);
+        return;
+    end
     
+    drawStimVector(handles);
+
+    
+
     set(handles.main, 'ResizeFcn', @resize_Callback);
+    set(handles.main, 'WindowButtonMotionFcn', @mouse_Callback);
+    set(handles.main, 'WindowButtonUpFcn', @click_Callback);
+    
+    % and guess how big the stim window should be -- how many
+    % pixels to the left and right of each stimulus point
+    guessWidth = length(handles.rawStimVector) / 100;
+    handles = setPixelsLeft(handles, guessWidth);
+    handles = setPixelsRight(handles, guessWidth);
     
     % save the handles struct
     guidata(handles.main, handles);
+    
+   
 
     % do not return anything until the user has clicked Ok or Cancel
     uiwait(handles.main);
@@ -36,6 +67,8 @@ function [success, stimVector] = staSetup( mpbus )
         % set return values and close
         stimVector = handles.stimVector;
         success = handles.success;
+        pixelsLeft = handles.pixelsLeft;
+        pixelsRight = handles.pixelsRight;
 
         close(handles.main);
     end
@@ -43,11 +76,74 @@ function [success, stimVector] = staSetup( mpbus )
 end
 
 function drawStimVector(handles)
+    persistent thresholdLine;
+
     set(handles.main, 'CurrentAxes', handles.axes_main);
+    cla
     
+    % draw the stim windows first so that they are in the background
+    drawStimWindows(handles);
+    
+    % draw the raw stim vector
     l = length(handles.rawStimVector);
     
-    plot(1:l, handles.rawStimVector);
+    hold on
+    plot(1:l, handles.rawStimVector, 'ButtonDownFcn', @click_Callback);
+    hold off
+    
+    set(handles.axes_main,...
+        'YTick', [],...
+        'ButtonDownFcn', @click_Callback);
+    
+    % draw the threshold line
+    y = handles.threshold;
+    if isempty(thresholdLine) || ~ishghandle(thresholdLine)
+        thresholdLine = line(xlim, [y y],...
+            'Color', 'red',...
+            'LineStyle', ':',...
+            'ButtonDownFcn', @click_Callback);
+    else
+        set(thresholdLine, 'YData', [y y], 'LineStyle', ':');
+    end
+    
+    % draw the stim vector (all the elements from the raw stim vector that
+    % are bigger than the threshold)
+    
+    hold on
+    plot(1:l, handles.stimVector, 'or', 'ButtonDownFcn', @click_Callback);
+    hold off
+    
+end
+
+function drawStimWindows(handles)
+    % draw a box to the left and to the right of every stimulus point
+
+    lastRectangles = findall(handles.axes_main, 'Tag', 'windowRectangle');
+    delete(lastRectangles);
+    
+    centerPoints = handles.reducedStimVector;
+    y = 0;
+    height = handles.threshold;
+    
+    width_left = handles.pixelsLeft;
+    width_right = handles.pixelsRight;
+    X_left = centerPoints - width_left;
+    X_right = centerPoints;
+    
+    
+    for index = 1 : length(centerPoints)
+        
+        rectangle('Position', [X_left(index), y, width_left, height],...
+                  'Tag', 'windowRectangle',...
+                  'Parent', handles.axes_main,...
+                  'FaceColor', handles.LIGHT_GREEN);
+              
+        rectangle('Position', [X_right(index), y, width_right, height],...
+                  'Tag', 'windowRectangle',...
+                  'Parent', handles.axes_main,...
+                  'FaceColor', handles.LIGHT_RED); 
+        
+    end
 end
 
 function stimVector = readAnalog(handles)
@@ -65,7 +161,8 @@ function stimVector = readAnalog(handles)
         analogChannel = analogChannelList(1);
     else
         % no analog channels
-        warndlg('No analog channel was found in the HDF5 file.');
+        disp('No analog channel was found in the HDF5 file.');
+        
         return;
     end
     
@@ -90,6 +187,155 @@ function closeGUI(hObject, ~, isOK)
     uiresume(handles.main);
 end
 
+function handles = setThreshold(handles, newThreshold)
+
+    if newThreshold <= 0
+        return;
+    end
+    
+    handles.threshold = newThreshold;
+
+    % also, build the stim vector using only elements from the raw stim
+    % vector that are bigger than the threshold
+    stimVector = handles.rawStimVector;
+    stimVector(stimVector < newThreshold) = 0;
+
+    
+    stimIndicies = find(stimVector);
+    if isempty(stimIndicies)
+        return;
+    end
+    
+    % collapse consecutive indicies into one index by taking the mean
+    % start with the first index then loop over the rest
+    n0 = stimIndicies(1);
+    consecutiveSum = n0;
+    consecutiveElements = 1;
+    reducedStimVector(1) = 0;   % undefined length until for loop is run
+    for stimIndiciesIndex = 2 : length(stimIndicies)
+       
+        n = stimIndicies(stimIndiciesIndex);
+
+        if n - n0 == 1
+            % this is a consecutive index
+            consecutiveSum = consecutiveSum + n;
+            consecutiveElements = consecutiveElements + 1;
+        else
+            % this is a new series of consecutive indicies
+            % first get the mean index from the last series and save it
+            reducedStimVector(end + 1) = consecutiveSum / consecutiveElements;
+            
+            % then prepare for the next iteration
+            consecutiveSum = n;
+            consecutiveElements = 1;
+        end
+        
+        % set n0 for the next iteration
+        n0 = n;
+        
+    end
+    % the last series isn't covered by the for loop
+    reducedStimVector(end + 1) = consecutiveSum / consecutiveElements;
+    
+    % clean up the reducedStimVector by removing the first element
+    reducedStimVector(1) = [];
+    reducedStimVector(reducedStimVector < 0) = 0;
+    
+    finalStimVector = zeros(length(stimVector), 1);
+    finalStimVector(reducedStimVector) = max(stimVector);
+    
+    
+    handles.stimVector = finalStimVector;
+    handles.reducedStimVector = reducedStimVector;
+
+    % and update the threshold value in the edit box
+    if isfield(handles, 'edit_threshold') && ishghandle(handles.edit_threshold)
+        set(handles.edit_threshold, 'String', sprintf('%0.1f', newThreshold));
+    end
+   
+end
+
+function handles = activateDrag(handles)
+    handles.dragIsActive = true;
+end
+
+function handles = deactivateDrag(handles)
+    handles.dragIsActive = false;
+end
+
+function updateDrag(handles, y_mouse)
+    handles = setThreshold(handles, y_mouse);
+    guidata(handles.main, handles);
+    
+    % redraw the plots/threshold
+    drawStimVector(handles);
+end
+
+function click_Callback(hObject, ~)
+    
+    handles = guidata(hObject);
+    
+    if handles.dragIsActive
+        handles = deactivateDrag(handles);
+    else
+        cursorType = get(handles.main, 'Pointer');
+        
+        if strcmp(cursorType, 'top')
+            handles = activateDrag(handles);
+        else
+            handles = deactivateDrag(handles);
+        end
+    end
+    
+    guidata(hObject, handles);
+end
+
+function mouse_Callback(hObject, ~)
+    MOUSE_PIXEL_TOLERANCE = 5;  % the number of pixels that the mouse
+                                % can be from a line and still be 'on the
+                                % line'
+    handles = guidata(hObject);
+    
+    mousePosition = get(handles.axes_main, 'CurrentPoint');
+    
+    xBounds = get(handles.axes_main, 'XLim');
+    yBounds = get(handles.axes_main, 'YLim');
+    
+    x = mousePosition(1,1);
+    y = mousePosition(1,2);
+
+    if x >= xBounds(1) && x <= xBounds(2) && y >= yBounds(1) && y <= yBounds(2)
+       % mouse is within axis
+       
+       if handles.dragIsActive
+            % just update the threshold and do nothing else in this function
+            updateDrag(handles, y);
+            return;
+       end
+       
+       % check if mouse is close to the threshold (a horizontal line)
+       axesPosition = getpixelposition(handles.axes_main);
+       pointsPerPixel = ( yBounds(2) - yBounds(1) ) / axesPosition(4);
+       
+       thresholdRange(1) = handles.threshold - ...
+                           MOUSE_PIXEL_TOLERANCE * pointsPerPixel;
+       thresholdRange(2) = handles.threshold + ...
+                           MOUSE_PIXEL_TOLERANCE * pointsPerPixel;
+                       
+       if y >= thresholdRange(1) && y <= thresholdRange(2)
+      
+          set(handles.main, 'Pointer', 'top');
+       else
+          set(handles.main, 'Pointer', 'arrow');
+       end
+       
+    else
+        % mouse is not within the axis
+       set(handles.main, 'Pointer', 'arrow');
+    end
+    
+end
+
 function resize_Callback(hObject, ~)
     handles = guidata(hObject);
     
@@ -106,6 +352,71 @@ function resize_Callback(hObject, ~)
     drawStimVector(handles);
     
     guidata(hObject, handles);
+end
+
+function handles = setPixelsLeft(handles, value)
+    if ~isnan(value) && value > 0
+        % valid entry
+        handles.pixelsLeft = round(value);
+    end
+    
+    set(handles.edit_pixelsLeft, 'String', sprintf('%d', handles.pixelsLeft) );
+    drawStimVector(handles);
+end
+
+function handles = setPixelsRight(handles, value)
+    if ~isnan(value) && value > 0
+        % valid entry
+        handles.pixelsRight = round(value);
+    end
+    
+    set(handles.edit_pixelsRight, 'String', sprintf('%d', handles.pixelsRight) );
+    drawStimVector(handles);
+end
+
+function pixelsLeft_Callback(hObject, ~)
+    handles = guidata(hObject);
+    pixelsLeftString = get(hObject, 'String');
+    handles = setPixelsLeft(handles, str2double(pixelsLeftString));
+    
+    guidata(hObject, handles);
+end
+
+function pixelsRight_Callback(hObject, ~)
+    handles = guidata(hObject);
+    pixelsRightString = get(hObject, 'String');
+    handles = setPixelsRight(handles, str2double(pixelsRightString));
+    
+    guidata(hObject, handles);
+end
+
+function maximize_Callback(hObject, ~)
+    % between every stimulus point is 2 boxes whose width are defined by
+    % pixelsLeft and pixelsRight (the box to the left of the stimulus has
+    % width = pixelsLeft etc)
+    
+    % maximize the width of the two boxes by finding the smallest
+    % difference between any 2 stimulus points, and setting 
+    % pixelsLeft = pixelsRight = minimum difference / 2
+    
+    handles = guidata(hObject);
+    
+    r = handles.reducedStimVector;
+    
+    if ~isempty(r)
+        % get the difference between each element in r 
+        differenceVector = diff(r);
+        minDifference = min(differenceVector);
+        
+        handles = setPixelsLeft(handles, minDifference / 2);
+        handles = setPixelsRight(handles, minDifference / 2);
+        
+        guidata(hObject, handles);
+        
+        
+        drawStimWindows(handles);
+        drawStimVector(handles);
+    end
 end
 
 function handles = createGUI()
@@ -235,10 +546,11 @@ function handles = populateGUI(handles)
     
     handles.edit_threshold = uicontrol(...
         'Parent', handles.panel_middle,...
+        'Background', 'white',...
         'Style', 'edit',...
         'Units', 'normalized',...
         'Position', [ edit_x, edit_y, edit_width, edit_height ],...
-        'String', '');
+        'String', sprintf('%0.1f', handles.threshold));
     
     %% TOP PANEL
     
@@ -248,48 +560,64 @@ function handles = populateGUI(handles)
     edit_height = handles.EDIT_HEIGHT / top_height;
     padding = label_width;
     
-    label_X(1) = (1 - padding) / 2 - label_width;
-    label_X(2) = (1 - padding) / 2 + label_width;
+    label_X(1) = (1 - padding - 1.5 * label_width) / 2;
+    label_X(2) = (1 - padding + 1.5 * label_width) / 2;
 
     edit_X = label_X + ( label_width - edit_width) / 2;
     
     label_y = 0.5;
-    edit_y = 0.1;
+    edit_y = 0.2;
     
-    handles.label_timeBefore = uicontrol(...
+    button_width = handles.BUTTON_WIDTH / top_width;
+    button_height = label_height;
+    button_x = (1 - button_width) / 2;
+    button_y = edit_y;
+    
+    handles.label_pixelsLeft = uicontrol(...
         'Parent', handles.panel_top,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ label_X(1), label_y, label_width, label_height ],...
         'String', 'Time before stimulus (in pixels)');
     
-    handles.edit_timeBefore = uicontrol(...
+    handles.edit_pixelsLeft = uicontrol(...
         'Parent', handles.panel_top,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'Position', [ edit_X(1), edit_y, edit_width, edit_height ],...
-        'String', '');
+        'Background', handles.LIGHT_GREEN,...
+        'Callback', @pixelsLeft_Callback,...
+        'String', sprintf('%d', handles.pixelsLeft));
     
-    handles.label_timeAfter = uicontrol(...
+    handles.label_pixelsRight = uicontrol(...
         'Parent', handles.panel_top,...
         'Style', 'text',...
         'Units', 'normalized',...
         'Position', [ label_X(2), label_y, label_width, label_height ],...
         'String', 'Time after stimulus (in pixels)');
     
-    handles.edit_timeAfter = uicontrol(...
+    handles.edit_pixelsRight = uicontrol(...
         'Parent', handles.panel_top,...
         'Style', 'edit',...
         'Units', 'normalized',...
         'Position', [ edit_X(2), edit_y, edit_width, edit_height ],...
-        'String', '');
+        'Background', handles.LIGHT_RED,...
+        'Callback', @pixelsRight_Callback,...
+        'String', sprintf('%d', handles.pixelsRight));
     
+      handles.button_maximize = uicontrol(...
+        'Parent', handles.panel_top,...
+        'Style', 'pushbutton',...
+        'Units', 'normalized',...
+        'String', 'Maximize',...
+        'Callback', @maximize_Callback,...
+        'Position', [ button_x, button_y, button_width, button_height ] );
     %% AXES
     padding = handles.PADDING / top_width;
     axes_x = middle_x + middle_width + padding;
     axes_y = bottom_y + bottom_height + padding;
     
-    axes_width = top_width - middle_width - 2 * padding;
+    axes_width = top_width - 2 * middle_width;
     axes_height = middle_height - 2 * padding;
     
     

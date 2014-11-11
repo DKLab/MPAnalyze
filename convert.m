@@ -13,6 +13,7 @@ function [ h5Filename, success ] = convert( mpdFilename )
     
     
     if exist(h5Filename,'file') && ~OVERWRITE,
+        sprintf('The file "%s" already exists.\n', h5Filename);
         success = false;
         return;
     end
@@ -289,6 +290,11 @@ function [success] = MpWriteHDF5Config(configStruct,h5FileName,configGroupName,i
                 numFields = numel(fieldNameList);
                 for fieldIter = 1:numFields,
                     thisField = thisStruct.(fieldNameList{fieldIter});
+                    
+                    if isstruct(thisField)
+                        disp('struct');
+                    end
+                    
                     entryName = [attributeName,num2str(structIter,'%08d'),'.',fieldNameList{fieldIter}];
                     h5writeatt(h5FileName,['/',configGroupName],entryName,thisField);
                 end%for fieldIter
