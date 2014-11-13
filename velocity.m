@@ -7,7 +7,7 @@ function results = velocity( imageStack )
     % the mean intensity of the image. The polynomial is then subtracted
     % from the image to ensure uniform intensity (this is needed for the
     % Radon transform)
-    UNIFORMITY_CORRECTION = 1;
+    UNIFORMITY_CORRECTION = 3;
     
     nFrames = size( imageStack, 3 );
 
@@ -20,8 +20,7 @@ function results = velocity( imageStack )
     results(nFrames) = struct(...
         'transform', [],...
         'angle', 0,...
-        'separability', 0,...
-        'maxVarianceRows', []);
+        'separability', 0);
     
     for frameIndex = 1 : nFrames
        
@@ -30,14 +29,13 @@ function results = velocity( imageStack )
         % unflipped, untransposed image
         block = flipud(transpose(imageStack(:,:,frameIndex)));
         
-        [transform, angle, separability, maxVarianceRows] = ...
-            radonTransform( block, UNIFORMITY_CORRECTION );
+        [transform, angle, separability] = ...
+            radonTransform( block, UNIFORMITY_CORRECTION, 1:179, 0.5, frameIndex == 1);
         
         % convert the angle from degrees to radians
         results(frameIndex).angle = angle * pi / 180;
         results(frameIndex).separability = separability;
         results(frameIndex).transform = transform;
-        results(frameIndex).maxVarianceRows = maxVarianceRows;
      
         % also, calculate how much time is remaining
         currentTime = clock;

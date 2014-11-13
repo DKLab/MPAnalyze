@@ -1715,8 +1715,6 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
             
             % also, indicate on the transform image where the max variance
             % was found
-            maxVarianceRows = handles.velocity(frameNumber).maxVarianceRows;
-            X = xlim;
             hold on
             
             transform = handles.velocity(frameNumber).transform;
@@ -1725,12 +1723,6 @@ function eof = drawFrame(handles, nFramesToAdvance, startingFrame)
             normalization = max(variancePlot) / 100;
             plot( variancePlot ./ normalization, 1:179 );
             
-%             for row = 1 : length(maxVarianceRows)
-%                 y = maxVarianceRows(row);
-%                 line(X, [y,y], ...
-%                     'Color', 'cyan',...
-%                     'LineWidth', 1);
-%             end
             hold off
             
             
@@ -2088,7 +2080,7 @@ function loadSample(hObject, ~, noiseFactor)
         addNoiseFlag = true;
     end
     
-    THICKNESS = 40;
+    THICKNESS = 5;
     width = 50;
     height = 100;
     nFrames = 50;
@@ -2171,7 +2163,7 @@ end
 function smallExportActiveRegion(hObject, ~)
     % export the active region (extract)
     handles = guidata(hObject);
-    SAMPLE_SIZE = 100;
+    SAMPLE_SIZE = 500;
     
     if ~isempty(handles.activeRegion)
 
